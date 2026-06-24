@@ -140,6 +140,14 @@ async function runTests() {
     201,
   );
 
+  await step("owner review queue shows the submitted completion", async () => {
+    const res = await api("GET", `/api/completions?companyId=${companyId}`, owner.token);
+    expectStatus(res, 200);
+    const ids = (res.body.completions || []).map((c) => c.id);
+    assert(ids.includes(completionId), `submitted completion not in review queue; queue=${JSON.stringify(ids)}`);
+    return summarize(res, { queue: ids });
+  });
+
   let invoiceId = null;
 
   await step("owner generates invoice draft with matching line items + tax", async () => {

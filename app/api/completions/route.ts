@@ -47,11 +47,15 @@ export async function GET(request: NextRequest) {
 
     await requireCompanyAdmin(supabase, user, companyId);
 
+    // Review queue = everything awaiting review. Show whatever reviewable status
+    // submit_job_completion produces; only EXCLUDE terminal statuses. This avoids
+    // a brittle exact-match on "submitted" that silently hides completions if the
+    // RPC writes a different reviewable status.
     const { data: completionData, error: completionError } = await supabase
       .from("job_completions")
       .select("id, company_id, job_id, employee_user_id, notes, status, submitted_at")
       .eq("company_id", companyId)
-      .eq("status", "submitted")
+      .not("status", "in", "(approved,rejected,completed,paid,void)")
       .order("submitted_at", { ascending: true });
 
     assertNoDbError(completionError);

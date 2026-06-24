@@ -363,6 +363,9 @@ export function OwnerDashboard() {
               onLoadMedia={loadJobMediaList}
               onPreviewMedia={openMediaPreview}
               onLoadDetails={loadCompletionDetails}
+              onReload={async () => {
+                await refreshData();
+              }}
               companyId={companyId}
               onLoadPrices={loadCompanyPrices}
               onSavePrice={saveCompanyPrice}
@@ -808,6 +811,7 @@ function ReviewPanel({
   onLoadMedia,
   onPreviewMedia,
   onLoadDetails,
+  onReload,
   companyId,
   onLoadPrices,
   onSavePrice,
@@ -820,6 +824,7 @@ function ReviewPanel({
   onLoadMedia: (jobId: string) => Promise<JobMedia[]>;
   onPreviewMedia: (jobId: string, mediaId: string) => Promise<void>;
   onLoadDetails: (completionId: string) => Promise<CompletionDetails>;
+  onReload: () => Promise<void>;
   companyId: string | null;
   onLoadPrices: (companyId: string) => Promise<{ services: ServicePrice[]; addons: AddonPrice[] }>;
   onSavePrice: (
@@ -835,6 +840,7 @@ function ReviewPanel({
   const [detailsByCompletion, setDetailsByCompletion] = useState<Record<string, CompletionDetails>>({});
   const [detailsBusy, setDetailsBusy] = useState<string | null>(null);
   const [selectedCompletionId, setSelectedCompletionId] = useState("");
+  const [reloadBusy, setReloadBusy] = useState(false);
 
   async function loadDetails(completionId: string) {
     setDetailsBusy(completionId);
@@ -885,6 +891,24 @@ function ReviewPanel({
         <div>
           <h3>Review queue</h3>
           <p>{completions.length} submitted completion{completions.length === 1 ? "" : "s"} waiting</p>
+        </div>
+        <div className="button-row">
+          <button
+            className="btn secondary"
+            type="button"
+            data-testid="review-reload"
+            disabled={reloadBusy}
+            onClick={async () => {
+              setReloadBusy(true);
+              try {
+                await onReload();
+              } finally {
+                setReloadBusy(false);
+              }
+            }}
+          >
+            {reloadBusy ? "Reloading…" : "Reload review queue"}
+          </button>
         </div>
       </div>
       <PricingEditor companyId={companyId} onLoadPrices={onLoadPrices} onSavePrice={onSavePrice} />
@@ -995,7 +1019,7 @@ function ReviewPanel({
             );
           })
         ) : (
-          <div className="empty">No submitted completions need review.</div>
+          <div className="empty">No submitted completions are waiting for review.</div>
         )}
       </div>
       {completions.length ? (
@@ -1039,7 +1063,7 @@ function ReviewPanel({
         </form>
       ) : (
         <div className="empty" data-testid="review-empty">
-          No submitted completions to review yet. Submitted jobs from employees appear here.
+          No submitted completions are waiting for review. Submitted jobs from employees appear here.
         </div>
       )}
     </section>

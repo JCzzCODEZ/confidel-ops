@@ -374,53 +374,68 @@ export function EmployeeDashboard() {
         },
         options,
       );
+      // The base completion row now exists and is in the owner's review queue.
+      // Everything below is best-effort enrichment — a failure here must NOT hide
+      // the submission; it becomes a warning instead.
       setCompletionId(result.completion.id);
+      const warnings: string[] = [];
 
-      // Structured data (services/add-ons/expenses/timing) — the real record,
-      // stored as rows the owner side can price, invoice, and export.
-      await recordCompletionDetails(
-        result.completion.id,
-        {
-          arrival: arrival || null,
-          start: startTime,
-          end: endTime,
-          breakMinutes: breakMinutes ? Number(breakMinutes) : null,
-          completionStatus,
-          services: [...services, ...(otherServiceNotes.trim() ? [`Other: ${otherServiceNotes.trim()}`] : [])],
-          addons: [...addOns, ...(otherAddonNotes.trim() ? [`Other: ${otherAddonNotes.trim()}`] : [])],
-          expenses: buildExpenses(),
-        },
-        options,
-      );
-
-      if (!selectedJob.company_id) {
-        setMessage("Completion submitted, but attachments could not be linked (missing company).");
-        await refreshJobs();
-        return;
+      try {
+        await recordCompletionDetails(
+          result.completion.id,
+          {
+            arrival: arrival || null,
+            start: startTime,
+            end: endTime,
+            breakMinutes: breakMinutes ? Number(breakMinutes) : null,
+            completionStatus,
+            services: [...services, ...(otherServiceNotes.trim() ? [`Other: ${otherServiceNotes.trim()}`] : [])],
+            addons: [...addOns, ...(otherAddonNotes.trim() ? [`Other: ${otherAddonNotes.trim()}`] : [])],
+            expenses: buildExpenses(),
+          },
+          options,
+        );
+      } catch {
+        warnings.push("service/expense details didn't save — the owner can still review, and you can resubmit");
       }
 
-      const groups = (
-        [
-          { mediaType: "before_photo", files: beforeFiles },
-          { mediaType: "after_photo", files: afterFiles },
-          { mediaType: "signature", files: [signatureFile] },
-          { mediaType: "other", files: otherFiles },
-        ] as { mediaType: JobMediaType; files: File[] }[]
-      ).filter((group) => group.files.length > 0);
+      if (selectedJob.company_id) {
+        try {
+          const groups = (
+            [
+              { mediaType: "before_photo", files: beforeFiles },
+              { mediaType: "after_photo", files: afterFiles },
+              { mediaType: "signature", files: [signatureFile] },
+              { mediaType: "other", files: otherFiles },
+            ] as { mediaType: JobMediaType; files: File[] }[]
+          ).filter((group) => group.files.length > 0);
+          if (groups.length) {
+            setMessage("Submitted for owner review. Uploading attachments…");
+            await uploadCompletionMedia({
+              companyId: selectedJob.company_id,
+              jobId: selectedJob.id,
+              completionId: result.completion.id,
+              groups,
+              options,
+              onProgress: (msg) => setMessage(`Submitted for owner review. ${msg}`),
+            });
+          }
+        } catch {
+          warnings.push("some attachments didn't upload — the owner can still review");
+        }
+      } else {
+        warnings.push("attachments weren't linked (missing company)");
+      }
 
-      setMessage("Completion submitted. Uploading attachments…");
-      const total = await uploadCompletionMedia({
-        companyId: selectedJob.company_id,
-        jobId: selectedJob.id,
-        completionId: result.completion.id,
-        groups,
-        options,
-        onProgress: (msg) => setMessage(`Completion submitted. ${msg}`),
-      });
-      setMessage(`Completion submitted with ${total} attachment${total === 1 ? "" : "s"}.`);
+      setMessage(
+        warnings.length
+          ? `Submitted for owner review. Note: ${warnings.join("; ")}.`
+          : "Submitted for owner review.",
+      );
       resetForm();
       await refreshJobs();
     } catch (submitError) {
+      // Only reached if the base completion submit itself failed.
       const raw = submitError instanceof Error ? submitError.message : "Completion failed.";
       setError(friendlyCompletionError(raw));
     } finally {
