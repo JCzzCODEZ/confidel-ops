@@ -546,7 +546,8 @@ function ClientsPanel({
 }) {
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const data = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const data = new FormData(form);
 
     onCreate({
       companyId,
@@ -557,7 +558,7 @@ function ClientsPanel({
       taxId: stringOrNull(data.get("taxId")),
       adminNotes: stringOrNull(data.get("adminNotes")),
     });
-    event.currentTarget.reset();
+    form.reset();
   }
 
   return (
@@ -645,7 +646,8 @@ function JobsPanel({
 }) {
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const data = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const data = new FormData(form);
     const priceCents = moneyToCents(String(data.get("price") ?? ""));
     const payrollCents = moneyToCents(String(data.get("payroll") ?? ""));
 
@@ -659,7 +661,7 @@ function JobsPanel({
       payrollCents,
       adminNotes: stringOrNull(data.get("adminNotes")),
     });
-    event.currentTarget.reset();
+    form.reset();
   }
 
   return (
