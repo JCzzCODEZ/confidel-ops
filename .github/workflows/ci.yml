@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Type safety + production build. No secrets required.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm install
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Production build
+        run: npm run build
+        env:
+          # Build does not need real Supabase values; placeholders keep it hermetic.
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: placeholder-anon-key
+
+  # Browser smoke test — only the logged-out auth guards, which need NO live
+  # Supabase (getSession returns null with no stored session, so no network).
+  # Role-routing / API / RLS suites need real accounts and are intentionally
+  # NOT run here (see DEPLOY.md "Run tests before deploy").
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm install
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run logged-out auth-guard e2e
+        run: npm run test:e2e
+        env:
+          # Placeholders so the app boots; the logged-out guard tests pass without
+          # any live Supabase. E2E_* account vars are unset, so the role-routing
+          # tests skip themselves.
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: placeholder-anon-key

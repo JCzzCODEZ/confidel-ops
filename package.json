@@ -1,0 +1,37 @@
+{
+  "name": "confidel-ops-backend",
+  "private": true,
+  "scripts": {
+    "dev": "WATCHPACK_POLLING=true next dev",
+    "build": "next build",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "playwright test",
+    "test:e2e:install": "playwright install chromium",
+    "test:api:signup": "node scripts/api-integration.mjs signup",
+    "test:api": "node scripts/api-integration.mjs test",
+    "test:rls:signup": "node scripts/rls-matrix-test.mjs signup",
+    "test:rls": "node scripts/rls-matrix-test.mjs test",
+    "test:storage:signup": "node scripts/storage-media-test.mjs signup",
+    "test:storage": "node scripts/storage-media-test.mjs test",
+    "test:structured:signup": "node scripts/structured-completion-test.mjs signup",
+    "test:structured": "node scripts/structured-completion-test.mjs test",
+    "test:pricing:signup": "node scripts/pricing-invoice-test.mjs signup",
+    "test:pricing": "node scripts/pricing-invoice-test.mjs test",
+    "test:onboarding:signup": "node scripts/onboarding-test.mjs signup",
+    "test:onboarding": "node scripts/onboarding-test.mjs test",
+    "test:security": "npm run typecheck && npm run test:e2e"
+  },
+  "dependencies": {
+    "@supabase/ssr": "^0.7.0",
+    "@supabase/supabase-js": "^2.50.0",
+    "next": "^15.3.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "typescript": "^5.8.0"
+  }
+}
