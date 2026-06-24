@@ -834,6 +834,7 @@ function ReviewPanel({
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [detailsByCompletion, setDetailsByCompletion] = useState<Record<string, CompletionDetails>>({});
   const [detailsBusy, setDetailsBusy] = useState<string | null>(null);
+  const [selectedCompletionId, setSelectedCompletionId] = useState("");
 
   async function loadDetails(completionId: string) {
     setDetailsBusy(completionId);
@@ -997,33 +998,50 @@ function ReviewPanel({
           <div className="empty">No submitted completions need review.</div>
         )}
       </div>
-      <form className="form-grid" onSubmit={submit}>
-        <label className="wide">
-          Completion
-          <select data-testid="review-completion" name="completionId" required>
-            <option value="">Select submitted completion</option>
-            {completions.map((completion) => (
-              <option key={completion.id} value={completion.id}>
-                {(completion.job_title || completion.job_id) + " · " + (completion.employee_name || "Employee")}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Decision
-          <select data-testid="review-decision" name="decision" required>
-            <option value="approve">Approve</option>
-            <option value="reject">Reject</option>
-          </select>
-        </label>
-        <label>
-          Review notes
-          <input name="reviewNotes" />
-        </label>
-        <button className="btn gold wide" data-testid="review-submit" disabled={busy} type="submit">
-          Save review
-        </button>
-      </form>
+      {completions.length ? (
+        <form className="form-grid" onSubmit={submit}>
+          <label className="wide">
+            Completion
+            <select
+              data-testid="review-completion"
+              name="completionId"
+              required
+              value={selectedCompletionId}
+              onChange={(event) => setSelectedCompletionId(event.target.value)}
+            >
+              <option value="">Select submitted completion</option>
+              {completions.map((completion) => (
+                <option key={completion.id} value={completion.id}>
+                  {(completion.job_title || completion.job_id) + " · " + (completion.employee_name || "Employee")}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Decision
+            <select data-testid="review-decision" name="decision" required>
+              <option value="approve">Approve</option>
+              <option value="reject">Reject</option>
+            </select>
+          </label>
+          <label>
+            Review notes
+            <input name="reviewNotes" />
+          </label>
+          <button
+            className="btn gold wide"
+            data-testid="review-submit"
+            disabled={busy || !selectedCompletionId}
+            type="submit"
+          >
+            Save review
+          </button>
+        </form>
+      ) : (
+        <div className="empty" data-testid="review-empty">
+          No submitted completions to review yet. Submitted jobs from employees appear here.
+        </div>
+      )}
     </section>
   );
 }
@@ -1070,7 +1088,9 @@ function PricingEditor({
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!companyId) return;
-    const data = new FormData(event.currentTarget);
+    // Capture the form before any await — currentTarget can be null afterward.
+    const form = event.currentTarget;
+    const data = new FormData(form);
     const kind = String(data.get("kind") ?? "service") === "addon" ? "addon" : "service";
     const name = String(data.get("name") ?? "").trim();
     const priceCents = moneyToCents(String(data.get("price") ?? "")) ?? 0;
@@ -1082,7 +1102,7 @@ function PricingEditor({
     setError(null);
     try {
       await onSavePrice(kind, { companyId, name, priceCents, taxable: data.get("taxable") === "on" });
-      event.currentTarget.reset();
+      form.reset();
       await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to save price.");
@@ -1501,7 +1521,11 @@ function RecordsPanel({
                 </article>
               ))
             ) : (
-              <div className="empty">No records for this period.</div>
+              <div className="empty">
+                {records.length === 0
+                  ? "No records yet. Generate an invoice draft from a reviewed completion first (Review tab → a submitted completion → Generate invoice draft)."
+                  : "No records for this period."}
+              </div>
             )}
           </div>
         </>
@@ -1563,7 +1587,9 @@ function TeamPanel({
   async function invite(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!companyId) return;
-    const data = new FormData(event.currentTarget);
+    // Capture the form before any await — currentTarget can be null afterward.
+    const form = event.currentTarget;
+    const data = new FormData(form);
     const email = String(data.get("email") ?? "").trim();
     if (!email) {
       setError("Enter an email address.");
@@ -1581,7 +1607,7 @@ function TeamPanel({
       });
       setInviteUrl(result.inviteUrl);
       setMessage(`Invite created for ${email}. They sign up with this email, then log in.`);
-      event.currentTarget.reset();
+      form.reset();
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to create invite.");
