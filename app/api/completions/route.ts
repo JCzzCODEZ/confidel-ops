@@ -47,15 +47,16 @@ export async function GET(request: NextRequest) {
 
     await requireCompanyAdmin(supabase, user, companyId);
 
-    // Review queue = everything awaiting review. Show whatever reviewable status
-    // submit_job_completion produces; only EXCLUDE terminal statuses. This avoids
-    // a brittle exact-match on "submitted" that silently hides completions if the
-    // RPC writes a different reviewable status.
+    // Review queue = everything awaiting review. Exclude only the terminal review
+    // outcomes. IMPORTANT: completion_status is a Postgres enum, so every value
+    // listed here MUST be a valid enum value — listing a non-existent value (e.g.
+    // "completed"/"paid"/"void") causes "invalid input value for enum" (22P02) and
+    // a 500. Only 'approved' and 'rejected' are valid terminal statuses.
     const { data: completionData, error: completionError } = await supabase
       .from("job_completions")
       .select("id, company_id, job_id, employee_user_id, notes, status, submitted_at")
       .eq("company_id", companyId)
-      .not("status", "in", "(approved,rejected,completed,paid,void)")
+      .not("status", "in", "(approved,rejected)")
       .order("submitted_at", { ascending: true });
 
     assertNoDbError(completionError);
