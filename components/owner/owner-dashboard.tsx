@@ -1652,13 +1652,14 @@ function TeamPanel({
       });
       setInviteUrl(result.inviteUrl);
       if (result.emailed) {
-        setMessage(`Invitation emailed to ${email}.`);
-      } else if (result.note === "existing_account") {
-        setMessage(`${email} already has an account — share the sign-in link below.`);
+        setMessage("Invitation emailed.");
       } else if (result.note === "email_not_configured") {
-        setMessage(`Invite created. Email isn't configured yet — share the link below.`);
+        setMessage("Invite created, but email isn't configured on the server. Share the link below.");
+      } else if (result.note === "existing_account") {
+        setMessage("This account already exists — a sign-in link was sent, or share the link below.");
       } else {
-        setMessage(`Invite created, but the email could not be sent. Share the link below.`);
+        // Safe note only — never the email, token, key, or full Supabase error.
+        setMessage(`Invite created, but email could not be sent (${result.note ?? "unknown"}). Share the link below.`);
       }
       form.reset();
       await load();
@@ -1690,7 +1691,12 @@ function TeamPanel({
     try {
       const r = await onResendInvite(companyId, inviteId);
       setInviteUrl(r.inviteUrl);
-      setMessage(r.emailed ? "Invitation re-emailed." : "Invitation refreshed — share the link below.");
+      // Safe note only — never the email, token, key, or full Supabase error.
+      setMessage(
+        r.emailed
+          ? "Invitation re-emailed."
+          : `Invitation refreshed, but email could not be sent (${r.note ?? "unknown"}). Share the link below.`,
+      );
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to resend invitation.");
