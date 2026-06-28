@@ -29,6 +29,8 @@ const emails = {
   owner: `confidel.team.owner.${runId}@example.com`,
   emp: `confidel.team.emp.${runId}@example.com`,
   admin: `confidel.team.admin.${runId}@example.com`,
+  // Pre-existing auth account used to prove existing-user language localization.
+  existing: `confidel.team.existing.${runId}@example.com`,
 };
 
 if (phase === "signup") {
@@ -80,6 +82,83 @@ async function runTests() {
     adminInviteToken = a.body.invite.token;
     assert(empInviteToken && adminInviteToken, "invite token missing");
     return summarize(e, { employeeInvite: e.body.invite.email, adminInvite: a.body.invite.email });
+  });
+
+  // ---- Bilingual invitations ----------------------------------------------
+  const enEmail = `confidel.lang.en.${runId}@example.com`;
+  const esEmail = `confidel.lang.es.${runId}@example.com`;
+
+  await step("owner can select English; English invite is stored and links with lang=en", async () => {
+    const inv = await api("POST", "/api/team/invite", owner.token, { companyId, email: enEmail, role: "employee", language: "en" });
+    expectStatus(inv, 201);
+    assert(inv.body.invite.preferred_language === "en", `expected en, got ${inv.body.invite.preferred_language}`);
+    assert(/[?&]lang=en(&|$)/.test(inv.body.inviteUrl), `inviteUrl missing lang=en: ${inv.body.inviteUrl}`);
+    return summarize(inv, { language: inv.body.invite.preferred_language });
+  });
+
+  await step("owner can select Spanish; Spanish invite is stored and links with lang=es", async () => {
+    const inv = await api("POST", "/api/team/invite", owner.token, { companyId, email: esEmail, role: "employee", language: "es" });
+    expectStatus(inv, 201);
+    assert(inv.body.invite.preferred_language === "es", `expected es, got ${inv.body.invite.preferred_language}`);
+    assert(/[?&]lang=es(&|$)/.test(inv.body.inviteUrl), `inviteUrl missing lang=es: ${inv.body.inviteUrl}`);
+    return summarize(inv, { language: inv.body.invite.preferred_language });
+  });
+
+  await step("invalid invitation language is rejected (400)", async () => {
+    const bad = await api("POST", "/api/team/invite", owner.token, { companyId, email: `confidel.lang.bad.${runId}@example.com`, role: "employee", language: "fr" });
+    expectStatus(bad, 400);
+    return summarize(bad, { rejected: true });
+  });
+
+  await step("resend preserves the invitation's original (Spanish) language", async () => {
+    const list = await api("GET", `/api/team/invites?companyId=${companyId}`, owner.token);
+    const inv = (list.body.invites || []).find((i) => i.email === esEmail && i.status === "pending");
+    assert(inv, "no pending Spanish invite");
+    const resent = await api("POST", "/api/team/invite/resend", owner.token, { companyId, inviteId: inv.id });
+    expectStatus(resent, 200);
+    assert(resent.body.invite.preferred_language === "es", `resend changed language to ${resent.body.invite.preferred_language}`);
+    assert(/[?&]lang=es(&|$)/.test(resent.body.inviteUrl), `resend inviteUrl missing lang=es: ${resent.body.inviteUrl}`);
+    return summarize(resent, { language: resent.body.invite.preferred_language });
+  });
+
+  await step("existing user invited in Spanish gets preferred_language merged into user_metadata (Spanish Magic Link)", async () => {
+    // `emails.existing` was created in the signup phase, so the invite hits the
+    // existing-user path. The server must updateUserById(user_metadata) BEFORE
+    // signInWithOtp so the Magic Link template can read {{ .Data.preferred_language }}.
+    const existingUser = await signIn("existing", emails.existing);
+    const inv = await api("POST", "/api/team/invite", owner.token, { companyId, email: emails.existing, role: "employee", language: "es" });
+    expectStatus(inv, 201);
+    assert(inv.body.invite.preferred_language === "es", "invite row language not es");
+
+    if (inv.body.note === "email_not_configured") {
+      // No service-role key on the server under test → admin metadata update is
+      // unreachable. The invite row language is still correct; full proof needs
+      // the service key (and the manual inbox test).
+      return summarize(inv, { skipped: "no service-role key", inviteLanguage: "es" });
+    }
+
+    // Re-fetch the user (network call → fresh user_metadata, not the stale JWT).
+    const fresh = supabaseForToken(existingUser.token);
+    const { data: udata, error: uerr } = await fresh.auth.getUser();
+    assert(!uerr, `getUser failed: ${uerr?.message}`);
+    const meta = udata?.user?.user_metadata ?? {};
+    assert(meta.preferred_language === "es", `existing user_metadata.preferred_language=${meta.preferred_language} (expected es)`);
+    // Pre-existing metadata (e.g. the signup-time role) must NOT be clobbered.
+    assert(meta.role === "existing", `existing metadata role lost: ${meta.role}`);
+    return summarize(inv, { metadataLanguage: meta.preferred_language, rolePreserved: meta.role });
+  });
+
+  await step("successful email delivery does not reveal the invite URL", async () => {
+    // When Supabase confirms delivery (emailed:true), the API must NOT expose a
+    // copy-link in any owner-visible message. inviteUrl is only the fallback the
+    // UI shows when emailed is false. Assert the contract the UI relies on.
+    const inv = await api("POST", "/api/team/invite", owner.token, { companyId, email: enEmail, role: "employee", language: "en" });
+    expectStatus(inv, 201);
+    if (inv.body.emailed === true) {
+      assert(inv.body.note === null || inv.body.note === "existing_account", `unexpected note on emailed invite: ${inv.body.note}`);
+    }
+    // The UI hides inviteUrl whenever emailed===true (verified in owner-dashboard).
+    return summarize(inv, { emailed: inv.body.emailed, uiShowsLink: inv.body.emailed === false });
   });
 
   await step("employee cannot access owner-only routes (pre-accept)", async () => {

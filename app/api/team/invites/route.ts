@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
     // All recent invites (pending/accepted/revoked) so the UI can show state.
     const { data, error } = await supabase
       .from("company_invites")
-      .select("id, email, full_name, role, status, token, created_at, expires_at")
+      .select("id, email, full_name, role, status, token, created_at, expires_at, preferred_language")
       .eq("company_id", companyId)
       .order("created_at", { ascending: false })
       .limit(50);

@@ -417,6 +417,7 @@ export type TeamInvite = {
   token: string;
   created_at: string;
   expires_at?: string | null;
+  preferred_language?: "en" | "es";
 };
 export type TeamMemberStat = {
   user_id: string;
@@ -435,7 +436,13 @@ export type InviteSendResponse = {
 };
 
 export async function inviteEmployee(
-  input: { companyId: string; email: string; fullName?: string | null; role?: "employee" | "admin" },
+  input: {
+    companyId: string;
+    email: string;
+    fullName?: string | null;
+    role?: "employee" | "admin";
+    language?: "en" | "es";
+  },
   options: ApiOptions = {},
 ) {
   return apiPost<InviteSendResponse>("/api/team/invite", input, options);

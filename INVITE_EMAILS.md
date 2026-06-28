@@ -91,6 +91,60 @@ Manual inbox test (production, with SMTP configured): owner invites a real email
 email arrives → open link → set password → membership active → owner assigns a job
 → employee logs in → only the assigned job appears.
 
+## Bilingual invitations (English / Español)
+
+The owner picks **Invitation language** (English | Español, default English) in the
+Team form. The choice is stored on `company_invites.preferred_language`
+(`'en'|'es'`, CHECK-constrained — see `db/fixes/2026-06-25_invite_language.sql`),
+validated server-side (anything other than `en`/`es` → HTTP 400), and carried into
+the acceptance URL: `…/accept-invite?invite=<token>&lang=en|es`. **Resending reuses
+the invitation's saved language.** Language is presentation-only — it has **no**
+authorization effect, and the role is never read from user metadata.
+
+### Email localization method — hosted template branching (no Send Email Hook)
+
+The installed stack (`@supabase/supabase-js ^2.50`, auth-js 2.108) supports
+per-email metadata: `inviteUserByEmail(email, { data, redirectTo })` writes `data`
+to `auth.users.user_metadata`, exposed in templates as `{{ .Data.preferred_language }}`.
+The app passes `data: { preferred_language: 'en'|'es' }` on every invite. For
+**existing** users, `signInWithOtp({ data })` does not reliably update metadata, so
+the server first resolves the user and calls
+`admin.auth.admin.updateUserById(id, { user_metadata: { ...existing, preferred_language } })`
+(merging — never clobbering other keys) **before** sending the Magic Link, so the
+template's `{{ .Data.preferred_language }}` resolves correctly. **Because reliable per-email metadata IS
+supported, branch inside the single hosted template — a Send Email Hook is not
+required.** (If you later move to a custom provider, the same `preferred_language`
+metadata selects the template in a Send Email Hook; never put roles in metadata.)
+
+Set this in **Supabase → Authentication → Email Templates → "Invite user"** (and
+mirror it in **"Magic Link"** for existing accounts). Subject:
+
+```
+{{ if eq .Data.preferred_language "es" }}Invitación para unirte a Confidel Ops{{ else }}You're invited to Confidel Ops{{ end }}
+```
+
+Body:
+
+```html
+{{ if eq .Data.preferred_language "es" }}
+  <h2>Invitación para unirte a Confidel Ops</h2>
+  <p>Has sido invitado a unirte a Confidel Ops. Haz clic en el botón para crear o acceder a tu cuenta.</p>
+  <p><a href="{{ .ConfirmationURL }}">Aceptar invitación</a></p>
+  <p>Si no esperabas esta invitación, puedes ignorar este correo.</p>
+{{ else }}
+  <h2>You're invited to Confidel Ops</h2>
+  <p>You've been invited to join Confidel Ops. Click the button to create or access your account.</p>
+  <p><a href="{{ .ConfirmationURL }}">Accept invitation</a></p>
+  <p>If you weren't expecting this invitation, you can ignore this email.</p>
+{{ end }}
+```
+
+The acceptance page (`/accept-invite`) defaults to the invitation's language, shows
+an **English | Español** switcher, and translates every visible string (loading,
+expired/revoked, no-invite, password labels + the min-length requirement, validation
+errors, success). Switching language changes only local state — the invite token and
+Auth session are preserved. Missing/invalid `lang` falls back to English.
+
 ## Service-role safety check (CI)
 Confirm the key never reaches the browser bundle:
 ```bash

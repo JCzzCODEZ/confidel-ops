@@ -523,6 +523,7 @@ async function sendTeamInvite(input: {
   email: string;
   fullName?: string | null;
   role?: "employee" | "admin";
+  language?: "en" | "es";
 }) {
   const options = await requireOptions();
   return inviteEmployee(input, options);
@@ -1593,6 +1594,7 @@ function TeamPanel({
     email: string;
     fullName?: string | null;
     role?: "employee" | "admin";
+    language?: "en" | "es";
   }) => Promise<InviteSendResponse>;
   onUpdateMembership: (input: {
     companyId: string;
@@ -1649,6 +1651,7 @@ function TeamPanel({
         email,
         fullName: String(data.get("fullName") ?? "").trim() || null,
         role: data.get("role") === "admin" ? "admin" : "employee",
+        language: data.get("language") === "es" ? "es" : "en",
       });
       if (result.emailed) {
         // Email sent — never surface the token-bearing link.
@@ -1765,6 +1768,13 @@ function TeamPanel({
           <select name="role" data-testid="team-invite-role">
             <option value="employee">Employee</option>
             <option value="admin">Admin</option>
+          </select>
+        </label>
+        <label>
+          Invitation language
+          <select name="language" defaultValue="en" required data-testid="team-invite-language">
+            <option value="en">English</option>
+            <option value="es">Español</option>
           </select>
         </label>
         <button className="btn gold" type="submit" data-testid="team-invite-submit" disabled={busy}>

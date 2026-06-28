@@ -29,13 +29,15 @@ export async function POST(request: NextRequest) {
       .eq("id", inviteId)
       .eq("company_id", companyId)
       .eq("status", "pending")
-      .select("id, email, full_name, role, status, token, expires_at")
+      .select("id, email, full_name, role, status, token, expires_at, preferred_language")
       .maybeSingle();
     assertNoDbError(error);
     if (!invite) return json({ error: "invite not found or not pending" }, 404);
 
-    const redirectTo = `${appUrl(request.nextUrl.origin)}/accept-invite?invite=${invite.token}`;
-    const send = await sendInviteEmail({ email: invite.email, redirectTo, fullName: invite.full_name });
+    // Resend preserves the invitation's original language.
+    const language = invite.preferred_language === "es" ? "es" : "en";
+    const redirectTo = `${appUrl(request.nextUrl.origin)}/accept-invite?invite=${invite.token}&lang=${language}`;
+    const send = await sendInviteEmail({ email: invite.email, redirectTo, fullName: invite.full_name, language });
 
     return json({ invite, emailed: send.emailed, inviteUrl: send.inviteUrl, note: send.note });
   } catch (error) {
