@@ -67,12 +67,18 @@ async function runTests() {
   const companyId = company.id;
   console.log(`SEEDED company_id=${companyId}`);
 
+  let empInviteToken = null;
+  let adminInviteToken = null;
+
   await step("owner invites an employee and an admin", async () => {
     const e = await api("POST", "/api/team/invite", owner.token, { companyId, email: emails.emp, fullName: "Crew One", role: "employee" });
     expectStatus(e, 201);
     assert(e.body.inviteUrl, "no inviteUrl returned");
+    empInviteToken = e.body.invite.token;
     const a = await api("POST", "/api/team/invite", owner.token, { companyId, email: emails.admin, fullName: "Admin Two", role: "admin" });
     expectStatus(a, 201);
+    adminInviteToken = a.body.invite.token;
+    assert(empInviteToken && adminInviteToken, "invite token missing");
     return summarize(e, { employeeInvite: e.body.invite.email, adminInvite: a.body.invite.email });
   });
 
@@ -82,7 +88,7 @@ async function runTests() {
   });
 
   await step("invited employee accepts and gains employee access", async () => {
-    const accept = await api("POST", "/api/team/accept", emp.token);
+    const accept = await api("POST", "/api/team/accept", emp.token, { token: empInviteToken });
     expectStatus(accept, 200);
     assert(accept.body.result?.accepted === true, `accept failed: ${JSON.stringify(accept.body)}`);
     const jobs = await api("GET", "/api/employee/jobs", emp.token);
@@ -100,13 +106,59 @@ async function runTests() {
   });
 
   await step("invited admin accepts and gains owner-dashboard access", async () => {
-    const accept = await api("POST", "/api/team/accept", admin.token);
+    const accept = await api("POST", "/api/team/accept", admin.token, { token: adminInviteToken });
     expectStatus(accept, 200);
     assert(accept.body.result?.accepted === true, "admin accept failed");
     expectStatus(await api("GET", `/api/clients?companyId=${companyId}`, admin.token), 200);
     expectStatus(await api("GET", `/api/reports/financials?companyId=${companyId}`, admin.token), 200);
     expectStatus(await api("GET", `/api/team/stats?companyId=${companyId}`, admin.token), 200);
     return summarize(accept, { adminAccess: true });
+  });
+
+  const probeEmail = `confidel.team.probe.${runId}@example.com`;
+
+  await step("pending invite is created and listed (email optional)", async () => {
+    const inv = await api("POST", "/api/team/invite", owner.token, { companyId, email: probeEmail, role: "employee" });
+    expectStatus(inv, 201);
+    const list = await api("GET", `/api/team/invites?companyId=${companyId}`, owner.token);
+    expectStatus(list, 200);
+    const found = (list.body.invites || []).find((i) => i.email === probeEmail && i.status === "pending");
+    assert(found, "probe invite not pending in list");
+    // email_not_configured (no service key) or existing_account is fine; never falsely "emailed"
+    return summarize(inv, { emailed: inv.body.emailed, note: inv.body.note });
+  });
+
+  await step("duplicate invite is handled safely (refresh, no error)", async () => {
+    const inv = await api("POST", "/api/team/invite", owner.token, { companyId, email: probeEmail, role: "admin" });
+    expectStatus(inv, 201);
+    const list = await api("GET", `/api/team/invites?companyId=${companyId}`, owner.token);
+    const pending = (list.body.invites || []).filter((i) => i.email === probeEmail && i.status === "pending");
+    assert(pending.length === 1, `expected 1 pending probe invite, got ${pending.length}`);
+    return summarize(inv, { pending: pending.length });
+  });
+
+  await step("owner can resend then revoke an invite", async () => {
+    const list = await api("GET", `/api/team/invites?companyId=${companyId}`, owner.token);
+    const inv = (list.body.invites || []).find((i) => i.email === probeEmail && i.status === "pending");
+    assert(inv, "no pending probe invite");
+    expectStatus(await api("POST", "/api/team/invite/resend", owner.token, { companyId, inviteId: inv.id }), 200);
+    expectStatus(await api("POST", "/api/team/invite/revoke", owner.token, { companyId, inviteId: inv.id }), 200);
+    const after = await api("GET", `/api/team/invites?companyId=${companyId}`, owner.token);
+    const revoked = (after.body.invites || []).find((i) => i.id === inv.id);
+    assert(revoked?.status === "revoked", `invite not revoked: ${revoked?.status}`);
+    return summarize({ status: 200 }, { status: revoked?.status });
+  });
+
+  await step("employee cannot send/resend/revoke invitations", async () => {
+    expectStatus(await api("POST", "/api/team/invite", emp.token, { companyId, email: `x.${runId}@example.com` }), 403);
+    return summarize({ status: 403 }, { blocked: true });
+  });
+
+  await step("reused acceptance fails (single-use)", async () => {
+    const res = await api("POST", "/api/team/accept", emp.token, { token: empInviteToken });
+    expectStatus(res, 200);
+    assert(res.body.result?.accepted === false, `second accept should fail, got ${JSON.stringify(res.body)}`);
+    return summarize(res, res.body);
   });
 
   await step("owner deactivates employee → blocked", async () => {

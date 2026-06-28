@@ -27,8 +27,11 @@ import {
   getTeamInvites,
   getTeamStats,
   inviteEmployee,
+  InviteSendResponse,
   InvoiceDraft,
   InvoiceRecord,
+  resendInvite,
+  revokeInvite,
   setMembership,
   TeamInvite,
   TeamMemberStat,
@@ -415,6 +418,8 @@ export function OwnerDashboard() {
               onLoadTeam={loadTeam}
               onInvite={sendTeamInvite}
               onUpdateMembership={updateTeamMembership}
+              onResendInvite={resendTeamInvite}
+              onRevokeInvite={revokeTeamInvite}
             />
           ) : null}
         </section>
@@ -521,6 +526,16 @@ async function sendTeamInvite(input: {
 }) {
   const options = await requireOptions();
   return inviteEmployee(input, options);
+}
+
+async function resendTeamInvite(companyId: string, inviteId: string) {
+  const options = await requireOptions();
+  return resendInvite(companyId, inviteId, options);
+}
+
+async function revokeTeamInvite(companyId: string, inviteId: string) {
+  const options = await requireOptions();
+  await revokeInvite(companyId, inviteId, options);
 }
 
 async function updateTeamMembership(input: {
@@ -1566,6 +1581,8 @@ function TeamPanel({
   onLoadTeam,
   onInvite,
   onUpdateMembership,
+  onResendInvite,
+  onRevokeInvite,
 }: {
   companyId: string | null;
   onLoadTeam: (
@@ -1576,13 +1593,15 @@ function TeamPanel({
     email: string;
     fullName?: string | null;
     role?: "employee" | "admin";
-  }) => Promise<{ invite: TeamInvite; inviteUrl: string }>;
+  }) => Promise<InviteSendResponse>;
   onUpdateMembership: (input: {
     companyId: string;
     userId: string;
     role?: "employee" | "admin" | null;
     isActive?: boolean | null;
   }) => Promise<void>;
+  onResendInvite: (companyId: string, inviteId: string) => Promise<InviteSendResponse>;
+  onRevokeInvite: (companyId: string, inviteId: string) => Promise<void>;
 }) {
   const [employees, setEmployees] = useState<EmployeeRecord[]>([]);
   const [invites, setInvites] = useState<TeamInvite[]>([]);
@@ -1632,7 +1651,15 @@ function TeamPanel({
         role: data.get("role") === "admin" ? "admin" : "employee",
       });
       setInviteUrl(result.inviteUrl);
-      setMessage(`Invite created for ${email}. They sign up with this email, then log in.`);
+      if (result.emailed) {
+        setMessage(`Invitation emailed to ${email}.`);
+      } else if (result.note === "existing_account") {
+        setMessage(`${email} already has an account — share the sign-in link below.`);
+      } else if (result.note === "email_not_configured") {
+        setMessage(`Invite created. Email isn't configured yet — share the link below.`);
+      } else {
+        setMessage(`Invite created, but the email could not be sent. Share the link below.`);
+      }
       form.reset();
       await load();
     } catch (err) {
@@ -1654,6 +1681,43 @@ function TeamPanel({
     } finally {
       setBusy(false);
     }
+  }
+
+  async function resend(inviteId: string) {
+    if (!companyId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await onResendInvite(companyId, inviteId);
+      setInviteUrl(r.inviteUrl);
+      setMessage(r.emailed ? "Invitation re-emailed." : "Invitation refreshed — share the link below.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to resend invitation.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revoke(inviteId: string) {
+    if (!companyId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onRevokeInvite(companyId, inviteId);
+      setMessage("Invitation revoked.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to revoke invitation.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function inviteState(inv: TeamInvite): string {
+    if (inv.status !== "pending") return inv.status;
+    if (inv.expires_at && new Date(inv.expires_at).getTime() < Date.now()) return "expired";
+    return "pending";
   }
 
   return (
@@ -1778,12 +1842,39 @@ function TeamPanel({
 
           {invites.length ? (
             <div className="stack" data-testid="team-invites">
-              <h3>Pending invites</h3>
-              {invites.map((inv) => (
-                <p className="muted small" key={inv.id}>
-                  {inv.email} · {inv.role} · {inv.status}
-                </p>
-              ))}
+              <h3>Invitations</h3>
+              {invites.map((inv) => {
+                const state = inviteState(inv);
+                return (
+                  <div className="card-row" key={inv.id} data-testid={`team-invite-${inv.id}`}>
+                    <p className="muted small">
+                      {inv.email} · {inv.role} · <strong>{state}</strong>
+                    </p>
+                    {inv.status === "pending" ? (
+                      <div className="button-row">
+                        <button
+                          className="btn secondary"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => resend(inv.id)}
+                          data-testid={`team-resend-${inv.id}`}
+                        >
+                          Resend
+                        </button>
+                        <button
+                          className="btn secondary"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => revoke(inv.id)}
+                          data-testid={`team-revoke-${inv.id}`}
+                        >
+                          Revoke
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           ) : null}
         </>

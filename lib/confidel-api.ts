@@ -416,6 +416,7 @@ export type TeamInvite = {
   status: string;
   token: string;
   created_at: string;
+  expires_at?: string | null;
 };
 export type TeamMemberStat = {
   user_id: string;
@@ -426,11 +427,24 @@ export type TeamMemberStat = {
   payroll_cents: number;
 };
 
+export type InviteSendResponse = {
+  invite: TeamInvite;
+  emailed: boolean;
+  inviteUrl: string;
+  note: string | null;
+};
+
 export async function inviteEmployee(
   input: { companyId: string; email: string; fullName?: string | null; role?: "employee" | "admin" },
   options: ApiOptions = {},
 ) {
-  return apiPost<{ invite: TeamInvite; inviteUrl: string }>("/api/team/invite", input, options);
+  return apiPost<InviteSendResponse>("/api/team/invite", input, options);
+}
+export async function resendInvite(companyId: string, inviteId: string, options: ApiOptions = {}) {
+  return apiPost<InviteSendResponse>("/api/team/invite/resend", { companyId, inviteId }, options);
+}
+export async function revokeInvite(companyId: string, inviteId: string, options: ApiOptions = {}) {
+  return apiPost<{ ok: boolean }>("/api/team/invite/revoke", { companyId, inviteId }, options);
 }
 export async function getTeamInvites(companyId: string, options: ApiOptions = {}) {
   return apiGet<{ invites: TeamInvite[] }>(
@@ -444,10 +458,10 @@ export async function setMembership(
 ) {
   return apiPost<{ ok: true }>("/api/team/membership", input, options);
 }
-export async function acceptInvite(options: ApiOptions = {}) {
-  return apiPost<{ result: { accepted: boolean; company_id?: string; role?: string } }>(
+export async function acceptInvite(options: ApiOptions = {}, inviteToken?: string) {
+  return apiPost<{ result: { accepted: boolean; company_id?: string; role?: string; reason?: string } }>(
     "/api/team/accept",
-    {},
+    inviteToken ? { token: inviteToken } : {},
     options,
   );
 }
