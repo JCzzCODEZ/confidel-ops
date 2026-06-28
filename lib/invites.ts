@@ -20,8 +20,15 @@ export async function sendInviteEmail(params: {
   redirectTo: string;
   fullName?: string | null;
 }): Promise<InviteSendResult> {
+  // Safe diagnostic: error CODE/STATUS only — never the key, email, or token.
+  const codeOf = (e: unknown) => {
+    const x = e as { code?: string; status?: number; name?: string } | null;
+    return x?.code ?? (x?.status != null ? String(x.status) : x?.name ?? "unknown");
+  };
+
   const admin = getSupabaseAdmin();
   if (!admin) {
+    console.error("[invite] admin client unavailable — SUPABASE_SERVICE_ROLE_KEY is not set on the server");
     return { emailed: false, inviteUrl: params.redirectTo, note: "email_not_configured" };
   }
 
@@ -32,6 +39,7 @@ export async function sendInviteEmail(params: {
   if (!error) {
     return { emailed: true, inviteUrl: params.redirectTo, note: null };
   }
+  console.error(`[invite] inviteUserByEmail failed: ${codeOf(error)}`);
 
   // Existing account → send a magic sign-in link to the accept page.
   if (/already|registered|exists/i.test(error.message)) {
@@ -48,10 +56,11 @@ export async function sendInviteEmail(params: {
       if (!otpError) {
         return { emailed: true, inviteUrl: params.redirectTo, note: "existing_account" };
       }
+      console.error(`[invite] signInWithOtp failed: ${codeOf(otpError)}`);
     }
     return { emailed: false, inviteUrl: params.redirectTo, note: "existing_account" };
   }
 
-  // Any other failure: do NOT claim the email was sent.
-  return { emailed: false, inviteUrl: params.redirectTo, note: "send_failed" };
+  // Any other failure: do NOT claim the email was sent. Surface the code.
+  return { emailed: false, inviteUrl: params.redirectTo, note: `send_failed:${codeOf(error)}` };
 }
