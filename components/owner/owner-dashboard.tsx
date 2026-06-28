@@ -1650,16 +1650,18 @@ function TeamPanel({
         fullName: String(data.get("fullName") ?? "").trim() || null,
         role: data.get("role") === "admin" ? "admin" : "employee",
       });
-      setInviteUrl(result.inviteUrl);
       if (result.emailed) {
+        // Email sent — never surface the token-bearing link.
+        setInviteUrl(null);
         setMessage("Invitation emailed.");
-      } else if (result.note === "email_not_configured") {
-        setMessage("Invite created, but email isn't configured on the server. Share the link below.");
-      } else if (result.note === "existing_account") {
-        setMessage("This account already exists — a sign-in link was sent, or share the link below.");
       } else {
-        // Safe note only — never the email, token, key, or full Supabase error.
-        setMessage(`Invite created, but email could not be sent (${result.note ?? "unknown"}). Share the link below.`);
+        // Delivery failed — show the link as the only fallback. Safe note only.
+        setInviteUrl(result.inviteUrl);
+        if (result.note === "email_not_configured") {
+          setMessage("Invite created, but email isn't configured on the server. Copy the link below to share.");
+        } else {
+          setMessage(`Invite created, but email could not be sent (${result.note ?? "unknown"}). Copy the link below to share.`);
+        }
       }
       form.reset();
       await load();
@@ -1690,13 +1692,14 @@ function TeamPanel({
     setError(null);
     try {
       const r = await onResendInvite(companyId, inviteId);
-      setInviteUrl(r.inviteUrl);
-      // Safe note only — never the email, token, key, or full Supabase error.
-      setMessage(
-        r.emailed
-          ? "Invitation re-emailed."
-          : `Invitation refreshed, but email could not be sent (${r.note ?? "unknown"}). Share the link below.`,
-      );
+      if (r.emailed) {
+        // Email sent — never surface the token-bearing link.
+        setInviteUrl(null);
+        setMessage("Invitation re-emailed.");
+      } else {
+        setInviteUrl(r.inviteUrl);
+        setMessage(`Invitation refreshed, but email could not be sent (${r.note ?? "unknown"}). Copy the link below to share.`);
+      }
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to resend invitation.");
@@ -1744,7 +1747,7 @@ function TeamPanel({
       {message ? <div className="notice success">{message}</div> : null}
       {inviteUrl ? (
         <div className="notice" data-testid="team-invite-url">
-          Invite link (share with the employee): {inviteUrl}
+          Email couldn&apos;t be sent — share this private link with the employee: {inviteUrl}
         </div>
       ) : null}
 
