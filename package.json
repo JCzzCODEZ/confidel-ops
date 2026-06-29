@@ -1,6 +1,9 @@
 {
   "name": "confidel-ops-backend",
   "private": true,
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "dev": "WATCHPACK_POLLING=true next dev",
     "build": "next build",
@@ -19,6 +22,7 @@
     "test:pricing": "node scripts/pricing-invoice-test.mjs test",
     "test:onboarding:signup": "node scripts/onboarding-test.mjs signup",
     "test:onboarding": "node scripts/onboarding-test.mjs test",
+    "test:unit": "node --test scripts/accept-invite-credential.test.ts",
     "test:security": "npm run typecheck && npm run test:e2e"
   },
   "dependencies": {
