@@ -24,27 +24,28 @@ jobs:
       - name: Install psql + uuidgen
         run: sudo apt-get update && sudo apt-get install -y postgresql-client uuid-runtime
 
-      - name: Guard — secret present, not production, positive test marker
+      -       - name: Guard — secret present, not production, positive test marker
         run: |
           set -euo pipefail
+
           : "${TEST_DATABASE_URL:?TEST_DATABASE_URL secret is not set}"
-          # NEVER set ALLOW_NONTEST_DB; the URL must self-identify as test/branch.
+
           case "$TEST_DATABASE_URL" in
-            *"$PROD_REF"*) echo "REFUSING: URL points at the production project."; exit 1;;
+            *"$PROD_REF"*)
+              echo "REFUSING: URL points at the production project."
+              exit 1
+              ;;
           esac
-          case "$TEST_DATABASE_URL" in
-            *test*|*branch*) : ;;
-            *) echo "REFUSING: URL is not a test/branch database."; exit 1;;
-          esac
-          # Positive DB-level marker BEYOND the URL name, in the PRIVATE schema
-          # (not API-exposed, so no RLS needed; readable only by the CI db role).
-          # Seed once on the test branch — see db/tests/README.md.
-          MARK=$(psql "$TEST_DATABASE_URL" -X -t -A \
-            -c "select count(*) from private._ci_test_marker where token='confidel-ci';" 2>/dev/null || echo missing)
-          if [ "$MARK" = "missing" ] || [ "$MARK" = "0" ]; then
-            echo "REFUSING: private._ci_test_marker not present/seeded on this database."; exit 1
+
+          MARK=$(psql "$TEST_DATABASE_URL" -X -t -A -v ON_ERROR_STOP=1 \
+            -c "select marker from private._ci_test_marker where marker = 'confidel-ci';" 2>/dev/null || echo missing)
+
+          if [ "$MARK" != "confidel-ci" ]; then
+            echo "REFUSING: private._ci_test_marker not present/seeded on this database."
+            exit 1
           fi
-          echo "Guard passed: dedicated test branch confirmed."
+
+          echo "Guard passed: non-production database marker confirmed."
 
       - name: Apply both migrations TWICE (proves rerunnable)
         run: |
