@@ -27,20 +27,16 @@ jobs:
       -       - name: Guard — secret present, not production, positive test marker
         run: |
           set -euo pipefail
-
           : "${TEST_DATABASE_URL:?TEST_DATABASE_URL secret is not set}"
 
           case "$TEST_DATABASE_URL" in
-            *"$PROD_REF"*)
-              echo "REFUSING: URL points at the production project."
-              exit 1
-              ;;
+            *"$PROD_REF"*) echo "REFUSING: URL points at the production project."; exit 1;;
           esac
 
           MARK=$(psql "$TEST_DATABASE_URL" -X -t -A -v ON_ERROR_STOP=1 \
-            -c "select marker from private._ci_test_marker where marker = 'confidel-ci';" 2>/dev/null || echo missing)
+            -c "select count(*) from private._ci_test_marker where marker='confidel-ci';" 2>/dev/null || echo missing)
 
-          if [ "$MARK" != "confidel-ci" ]; then
+          if [ "$MARK" = "missing" ] || [ "$MARK" = "0" ]; then
             echo "REFUSING: private._ci_test_marker not present/seeded on this database."
             exit 1
           fi
