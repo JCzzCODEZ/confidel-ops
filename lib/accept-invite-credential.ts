@@ -28,6 +28,30 @@ export type CredentialInput = {
   hashError: string | null;
 };
 
+export type CapturedCredentials = CredentialInput & {
+  lang: string | null;
+  inviteParam: string | null;
+};
+
+// Read every credential + the lang/invite token out of a URL (query AND hash).
+// Call this BEFORE constructing the Supabase browser client and scrubbing the URL,
+// so the captured values survive the scrub and the client never auto-detects them.
+export function captureInviteCredentials(url: URL): CapturedCredentials {
+  const hash = url.hash.startsWith("#")
+    ? new URLSearchParams(url.hash.slice(1))
+    : new URLSearchParams();
+  return {
+    lang: url.searchParams.get("lang"),
+    inviteParam: url.searchParams.get("invite"),
+    tokenHash: url.searchParams.get("token_hash"),
+    otpType: url.searchParams.get("type"),
+    code: url.searchParams.get("code"),
+    hashAccess: hash.get("access_token"),
+    hashRefresh: hash.get("refresh_token"),
+    hashError: hash.get("error_description") || hash.get("error"),
+  };
+}
+
 export type CredentialDecision =
   | { kind: "verify"; tokenHash: string; otpType: EmailOtp }
   | { kind: "exchange"; code: string }

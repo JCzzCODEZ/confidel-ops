@@ -7,6 +7,7 @@ import { getApiOptions, hasOwnerAccess } from "../../lib/auth";
 import { createSupabaseBrowserClient } from "../../lib/supabase/client";
 import {
   INVITE_STASH_KEY,
+  captureInviteCredentials,
   cleanInviteHref,
   decideCredential,
   resolveInviteToken,
@@ -139,26 +140,27 @@ export default function AcceptInvitePage() {
     initRan.current = true;
 
     async function init() {
-      const supabase = createSupabaseBrowserClient();
       const url = new URL(window.location.href);
-      setLang(normalizeLang(url.searchParams.get("lang")));
 
-      // --- Capture every credential + the invite token BEFORE touching the URL --
-      const inviteParam = url.searchParams.get("invite");
-      const tokenHash = url.searchParams.get("token_hash");
-      const otpType = url.searchParams.get("type");
-      const code = url.searchParams.get("code");
-      // Implicit-flow hash: capture the tokens (and any error) BEFORE we clear the
-      // hash, otherwise we'd destroy the session before persisting it.
-      const hash = window.location.hash.startsWith("#")
-        ? new URLSearchParams(window.location.hash.slice(1))
-        : new URLSearchParams();
-      const hashAccess = hash.get("access_token");
-      const hashRefresh = hash.get("refresh_token");
-      const hashError = hash.get("error_description") || hash.get("error");
+      // Capture every credential (query + hash) BEFORE constructing the Supabase
+      // client. @supabase/ssr forces detectSessionInUrl=isBrowser() and caches a
+      // singleton, so we can't disable its auto-detection via options. Instead we
+      // strip the URL first, so the client (built below) never sees an auth
+      // fragment — it can't race our scrub or leave #access_token in history.
+      const cap = captureInviteCredentials(url);
+      setLang(normalizeLang(cap.lang));
 
-      // Stash the invite token out of the URL (sessionStorage is never sent in a
-      // URL/referrer and survives reloads), then restore it on later loads.
+      // Strip invite + every credential (query AND hash) up front. The very first
+      // request URL has already reached hosting logs — fully eliminating that
+      // needs a server flow where the app only ever receives a PKCE code/fragment.
+      // See AUDIT_2026-06-28.md.
+      window.history.replaceState(null, "", cleanInviteHref(url.toString()));
+
+      // Constructed AFTER the scrub, so its forced detectSessionInUrl is a no-op.
+      const supabase = createSupabaseBrowserClient();
+
+      // Stash the invite token (sessionStorage is never sent in a URL/referrer and
+      // survives reloads), then restore it on later loads.
       const storage = (() => {
         try {
           return window.sessionStorage;
@@ -166,18 +168,9 @@ export default function AcceptInvitePage() {
           return null;
         }
       })();
-      const inviteToken = resolveInviteToken(inviteParam, storage);
+      const inviteToken = resolveInviteToken(cap.inviteParam, storage);
       setInviteToken(inviteToken);
 
-      // Mitigation (NOT a full fix): strip invite + credentials from the address
-      // bar/history so they don't leak via referrer on later requests. The very
-      // first request URL has already reached hosting logs — eliminating that
-      // needs a server flow where the app only ever receives a PKCE code/fragment
-      // (a server callback alone, with the token still in the query string, does
-      // not). See AUDIT_2026-06-28.md.
-      const scrubUrl = () => {
-        window.history.replaceState({}, "", cleanInviteHref(window.location.href));
-      };
       // Terminal failure: drop the dead token and render — only on the live instance.
       const fail = (p: Exclude<Phase, "ready" | "done" | "loading">) => {
         clearInviteStash();
@@ -187,13 +180,13 @@ export default function AcceptInvitePage() {
       try {
         // --- Pick EXACTLY ONE credential (rejects conflicts, partial hashes,
         // hash errors, bad types). The link credential is authoritative and
-        // overrides any account already signed in on this browser. ------------
-        const decision = decideCredential({ tokenHash, otpType, code, hashAccess, hashRefresh, hashError });
+        // overrides any account already signed in on this browser. The captured
+        // values are used here — the URL is already clean. ------------------
+        const decision = decideCredential(cap);
 
         let session = null as Awaited<ReturnType<typeof supabase.auth.getSession>>["data"]["session"];
         switch (decision.kind) {
           case "link_error": {
-            scrubUrl();
             fail("link_error");
             return;
           }
@@ -202,7 +195,6 @@ export default function AcceptInvitePage() {
               token_hash: decision.tokenHash,
               type: decision.otpType,
             });
-            scrubUrl();
             if (error) {
               fail("link_error");
               return;
@@ -212,7 +204,6 @@ export default function AcceptInvitePage() {
           }
           case "exchange": {
             const { data, error } = await supabase.auth.exchangeCodeForSession(decision.code);
-            scrubUrl();
             if (error) {
               fail("link_error");
               return;
@@ -226,7 +217,6 @@ export default function AcceptInvitePage() {
               access_token: decision.accessToken,
               refresh_token: decision.refreshToken,
             });
-            scrubUrl();
             if (error) {
               fail("link_error");
               return;
@@ -237,7 +227,6 @@ export default function AcceptInvitePage() {
           case "existing": {
             // No link credential — reuse an existing signed-in session.
             session = (await supabase.auth.getSession()).data.session;
-            scrubUrl();
             break;
           }
         }
@@ -269,7 +258,6 @@ export default function AcceptInvitePage() {
         setRole(invite.role);
         setPhase("ready"); // keep the stashed token — handleAccept needs it
       } catch {
-        scrubUrl();
         fail("error");
       }
     }

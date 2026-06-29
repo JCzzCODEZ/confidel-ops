@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   INVITE_STASH_KEY,
+  captureInviteCredentials,
   cleanInviteHref,
   decideCredential,
   resolveInviteToken,
@@ -83,6 +84,26 @@ test("hash error fragment -> link_error/hash_error (even with another credential
 
 test("no credential -> existing", () => {
   assert.deepEqual(decideCredential(base), { kind: "existing" });
+});
+
+test("captureInviteCredentials reads query + hash (incl. partial/error fragments)", () => {
+  const u = new URL(
+    "https://app.example.com/accept-invite?invite=TOK&lang=es&token_hash=TH&type=invite&code=C#access_token=AT&refresh_token=RT",
+  );
+  const c = captureInviteCredentials(u);
+  assert.equal(c.lang, "es");
+  assert.equal(c.inviteParam, "TOK");
+  assert.equal(c.tokenHash, "TH");
+  assert.equal(c.otpType, "invite");
+  assert.equal(c.code, "C");
+  assert.equal(c.hashAccess, "AT");
+  assert.equal(c.hashRefresh, "RT");
+  assert.equal(c.hashError, null);
+  // error fragment captured too
+  const e = captureInviteCredentials(new URL("https://app.example.com/accept-invite#error=access_denied"));
+  assert.equal(e.hashError, "access_denied");
+  // the captured object feeds decideCredential directly (it is a superset)
+  assert.equal(decideCredential(captureInviteCredentials(new URL("https://app.example.com/x"))).kind, "existing");
 });
 
 test("cleanInviteHref strips invite/token_hash/code/type AND hash, keeps lang", () => {
