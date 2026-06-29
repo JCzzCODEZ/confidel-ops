@@ -9,8 +9,8 @@ so no RLS is needed; readable only by the privileged CI database role):
 
 ```sql
 create schema if not exists private;
-create table if not exists private._ci_test_marker (token text primary key);
-insert into private._ci_test_marker (token) values ('confidel-ci')
+create table if not exists private._ci_test_marker (marker text primary key);
+insert into private._ci_test_marker (marker) values ('confidel-ci')
   on conflict do nothing;
 -- Lock it down: never reachable by API roles.
 revoke all on private._ci_test_marker from public, anon, authenticated;

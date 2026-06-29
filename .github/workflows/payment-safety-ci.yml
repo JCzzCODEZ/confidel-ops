@@ -33,11 +33,16 @@ jobs:
               exit 1
               ;;
           esac
-MARK=$(psql "$TEST_DATABASE_URL" -X -t -A -v ON_ERROR_STOP=1 \
-  -c "select marker from private._ci_test_marker where marker = 'confidel-ci';" || echo missing))
+
+          # Positive DB-level marker in the PRIVATE schema (not API-exposed).
+          # ON_ERROR_STOP=1 + set -e mean a real psql/connection error fails the
+          # step and prints the actual error — we do NOT swallow it with "|| echo".
+          MARK="$(psql "$TEST_DATABASE_URL" -X -t -A -v ON_ERROR_STOP=1 \
+            -c "select marker from private._ci_test_marker where marker = 'confidel-ci';")"
+          MARK="$(printf '%s' "$MARK" | tr -d '[:space:]')"
 
           if [ "$MARK" != "confidel-ci" ]; then
-            echo "REFUSING: private._ci_test_marker not present/seeded on this database."
+            echo "REFUSING: private._ci_test_marker did not return 'confidel-ci' (got: '$MARK')."
             exit 1
           fi
 
