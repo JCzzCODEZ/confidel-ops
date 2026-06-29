@@ -37,8 +37,12 @@ import {
   TeamMemberStat,
   JobMedia,
   JobRecord,
+  canonicalPaymentMethod,
+  canonicalPaymentReference,
+  PAYMENT_METHODS,
   listJobMedia,
   OwnerCompletionRecord,
+  type PaymentResult,
   recordPayment,
   reviewJob,
   ServicePrice,
@@ -400,9 +404,19 @@ export function OwnerDashboard() {
               onPayment={(form) =>
                 withAction(async () => {
                   const options = await requireOptions();
-                  const result = await recordPayment(form, options);
+                  // Same persisted-key helper as pay(): retries reuse one key,
+                  // keyed by the FULL fingerprint (incl. method + reference).
+                  const fp = {
+                    invoiceId: String(form.invoiceId ?? ""),
+                    amountCents: Number(form.amountCents ?? 0),
+                    method: typeof form.method === "string" ? form.method : null,
+                    reference: typeof form.reference === "string" ? form.reference : null,
+                  };
+                  const idempotencyKey = await paymentIdempotencyKey(fp);
+                  const result = await recordPayment({ ...form, idempotencyKey }, options);
+                  if (fp.invoiceId) await clearPaymentIdempotency(fp);
                   await refreshData();
-                  return `Payment recorded: ${result.payment.id}`;
+                  return `Payment recorded: ${result.payment?.id ?? "(already recorded)"}`;
                 })
               }
             />
@@ -493,10 +507,99 @@ async function generateInvoiceDraft(completionId: string, opts: { taxRateBps: nu
   return result.draft;
 }
 
-async function recordDraftPayment(invoiceId: string, amountCents: number) {
+// Shared idempotency-key helper for BOTH payment paths (draft pay() and the
+// inline invoices-panel form). The key is PERSISTED and REUSED across retries
+// per the FULL request fingerprint — invoiceId + amountCents + normalized method
+// + normalized reference — which is exactly what the server compares. The
+// sessionStorage key IS the fingerprint, so changing ANY field mints a new key
+// without clobbering an unresolved (timed-out) operation's key for a different
+// fingerprint. Normalization matches the server: trim, treat null/'' as ''.
+type PaymentFingerprint = {
+  invoiceId: string;
+  amountCents: number;
+  method?: string | null;
+  reference?: string | null;
+};
+// In-memory fallback used only when sessionStorage is unavailable (private mode,
+// disabled storage). Lives for the page session, which is enough for retries.
+const memPaymentKeys = new Map<string, string>();
+function storageGet(k: string): string | null {
+  try {
+    return window.sessionStorage.getItem(k);
+  } catch {
+    return memPaymentKeys.get(k) ?? null;
+  }
+}
+function storageSet(k: string, v: string): void {
+  try {
+    window.sessionStorage.setItem(k, v);
+  } catch {
+    memPaymentKeys.set(k, v);
+  }
+}
+function storageRemove(k: string): void {
+  try {
+    window.sessionStorage.removeItem(k);
+  } catch {
+    memPaymentKeys.delete(k);
+  }
+}
+// Canonical serialized fingerprint — same canonicalization as the API route/DB.
+function canonicalFingerprint(fp: PaymentFingerprint): string {
+  return JSON.stringify({
+    i: fp.invoiceId,
+    a: fp.amountCents,
+    m: canonicalPaymentMethod(fp.method),
+    r: canonicalPaymentReference(fp.reference) ?? "",
+  });
+}
+// SHA-256 (collision-resistant) for the storage-KEY NAME, so it never embeds the
+// raw reference. Async via SubtleCrypto; a deterministic fallback is used only in
+// a non-secure context — and is still safe because the stored VALUE carries the
+// full fingerprint, which we verify on read.
+async function fingerprintHash(canonical: string): Promise<string> {
+  try {
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+    return Array.from(new Uint8Array(buf))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  } catch {
+    let h = 0;
+    for (let i = 0; i < canonical.length; i++) h = (Math.imul(31, h) + canonical.charCodeAt(i)) | 0;
+    return "fallback-" + (h >>> 0).toString(16);
+  }
+}
+async function fingerprintStorageKey(fp: PaymentFingerprint): Promise<string> {
+  return "confidel.pay." + (await fingerprintHash(canonicalFingerprint(fp)));
+}
+async function paymentIdempotencyKey(fp: PaymentFingerprint): Promise<string> {
+  const canonical = canonicalFingerprint(fp);
+  const name = "confidel.pay." + (await fingerprintHash(canonical));
+  const raw = storageGet(name);
+  if (raw) {
+    try {
+      const v = JSON.parse(raw) as { fp: string; key: string };
+      // Reuse ONLY when the FULL fingerprint matches — so even an (effectively
+      // impossible) SHA-256 collision can never hand back another payment's key.
+      if (v.fp === canonical && v.key) return v.key;
+    } catch {
+      /* corrupt entry — mint a fresh key */
+    }
+  }
+  const key = crypto.randomUUID();
+  storageSet(name, JSON.stringify({ fp: canonical, key }));
+  return key;
+}
+async function clearPaymentIdempotency(fp: PaymentFingerprint): Promise<void> {
+  storageRemove(await fingerprintStorageKey(fp));
+}
+
+async function recordDraftPayment(invoiceId: string, amountCents: number, idempotencyKey: string) {
   const options = await requireOptions();
-  await recordPayment(
-    { invoiceId, amountCents, paidAt: new Date().toISOString(), method: "manual" },
+  // Return the authoritative server result (paid/balance/status) so the UI never
+  // guesses from local arithmetic. idempotencyKey dedupes transport retries.
+  return recordPayment(
+    { invoiceId, amountCents, idempotencyKey, paidAt: new Date().toISOString(), method: "manual" },
     options,
   );
 }
@@ -850,7 +953,7 @@ function ReviewPanel({
     input: { companyId: string; name: string; priceCents: number; taxable: boolean },
   ) => Promise<void>;
   onGenerateDraft: (completionId: string, opts: { taxRateBps: number; discountCents: number }) => Promise<InvoiceDraft>;
-  onRecordPayment: (invoiceId: string, amountCents: number) => Promise<void>;
+  onRecordPayment: (invoiceId: string, amountCents: number, idempotencyKey: string) => Promise<PaymentResult>;
 }) {
   const [mediaByCompletion, setMediaByCompletion] = useState<Record<string, JobMedia[]>>({});
   const [mediaBusy, setMediaBusy] = useState<string | null>(null);
@@ -1211,7 +1314,7 @@ function CompletionPricing({
 }: {
   completion: OwnerCompletionRecord;
   onGenerateDraft: (completionId: string, opts: { taxRateBps: number; discountCents: number }) => Promise<InvoiceDraft>;
-  onRecordPayment: (invoiceId: string, amountCents: number) => Promise<void>;
+  onRecordPayment: (invoiceId: string, amountCents: number, idempotencyKey: string) => Promise<PaymentResult>;
 }) {
   const [taxPct, setTaxPct] = useState("0");
   const [discount, setDiscount] = useState("0");
@@ -1220,18 +1323,31 @@ function CompletionPricing({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function opts() {
-    return {
-      taxRateBps: Math.round((Number(taxPct) || 0) * 100),
-      discountCents: Math.round((Number(discount) || 0) * 100),
-    };
-  }
-
   async function generate() {
+    // Validate the tax rate explicitly — blank/invalid must NOT silently become
+    // 0% tax. An intentional "0" (tax-exempt) is still allowed.
+    const rawTaxPct = taxPct.trim();
+    const taxPctNumber = Number(rawTaxPct);
+    if (rawTaxPct === "" || !Number.isFinite(taxPctNumber) || taxPctNumber < 0 || taxPctNumber > 100) {
+      setError("Enter a tax rate between 0 and 100 (e.g. 6.625). Use 0 for a tax-exempt sale.");
+      return;
+    }
+    const rawDiscount = discount.trim();
+    const discountNumber = rawDiscount === "" ? 0 : Number(rawDiscount);
+    if (!Number.isFinite(discountNumber) || discountNumber < 0) {
+      setError("Enter a valid non-negative discount (use 0 for none).");
+      return;
+    }
+
+    // Percent -> basis points, preserving the 0.5-bps precision NJ needs
+    // (6.625% -> 662.5 bps). Round only to 0.1 bps to kill float dust.
+    const taxRateBps = Math.round(taxPctNumber * 1000) / 10;
+    const discountCents = Math.round(discountNumber * 100);
+
     setBusy(true);
     setError(null);
     try {
-      setDraft(await onGenerateDraft(completion.id, opts()));
+      setDraft(await onGenerateDraft(completion.id, { taxRateBps, discountCents }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to generate draft.");
     } finally {
@@ -1246,13 +1362,34 @@ function CompletionPricing({
       setError("Enter a payment amount.");
       return;
     }
+
+    // Reuse a persisted idempotency key for this exact fingerprint across retries.
+    // recordDraftPayment sends method='manual' and no reference, so the fingerprint
+    // mirrors what the server will compare.
+    const fp = { invoiceId: draft.invoice_id, amountCents: cents, method: "manual", reference: null };
+    const idempotencyKey = await paymentIdempotencyKey(fp);
+
     setBusy(true);
     setError(null);
     try {
-      await onRecordPayment(draft.invoice_id, cents);
-      setDraft(await onGenerateDraft(completion.id, opts())); // refresh paid/balance
+      // Recording a payment must NOT regenerate the invoice (that RPC rebuilds
+      // lines/tax/discount; a paid invoice is immutable). Update from the
+      // AUTHORITATIVE server response — never local prev+cents arithmetic.
+      const result = await onRecordPayment(draft.invoice_id, cents, idempotencyKey);
+      await clearPaymentIdempotency(fp); // success → fresh key next time
+      setDraft((prev) =>
+        prev
+          ? {
+              ...prev,
+              amount_paid_cents: result.amount_paid_cents ?? prev.amount_paid_cents,
+              balance_due_cents: result.balance_due_cents ?? prev.balance_due_cents,
+              payment_status: result.payment_status ?? prev.payment_status,
+            }
+          : prev,
+      );
       setPayment("");
     } catch (err) {
+      // Keep the persisted intent so a retry reuses the same idempotency key.
       setError(err instanceof Error ? err.message : "Unable to record payment.");
     } finally {
       setBusy(false);
@@ -1264,7 +1401,7 @@ function CompletionPricing({
       <div className="form-grid">
         <label>
           Tax rate (%)
-          <input type="number" min="0" step="0.001" value={taxPct} onChange={(e) => setTaxPct(e.target.value)} data-testid={`pricing-tax-${completion.id}`} />
+          <input type="number" min="0" max="100" step="0.001" value={taxPct} onChange={(e) => setTaxPct(e.target.value)} data-testid={`pricing-tax-${completion.id}`} />
         </label>
         <label>
           Discount ($)
@@ -2040,7 +2177,13 @@ function BillingPanel({
           </label>
           <label>
             Method
-            <input name="method" />
+            <select name="method" defaultValue="manual">
+              {PAYMENT_METHODS.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
           </label>
           <label>
             Reference

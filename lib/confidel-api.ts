@@ -323,6 +323,10 @@ export type InvoiceDraft = {
   invoice_id: string;
   subtotal_cents: number;
   discount_cents: number;
+  // Always populated by the (post-migration) RPC for a freshly generated draft.
+  taxable_subtotal_cents: number;
+  taxable_discount_cents: number;
+  tax_rate_bps: number;
   tax_cents: number;
   total_cents: number;
   reimbursement_cents: number;
@@ -341,6 +345,11 @@ export type FinancialSummary = {
   invoice_id: string | null;
   gross_revenue_cents: number;
   taxable_subtotal_cents: number;
+  // Persisted tax inputs. NULL for legacy rows created before the numeric-rate
+  // migration (calculation_version distinguishes them: NULL = legacy, 2 = new).
+  tax_rate_bps: number | null;
+  taxable_discount_cents: number | null;
+  calculation_version: number | null;
   tax_cents: number;
   discount_cents: number;
   invoice_total_cents: number;
@@ -379,7 +388,9 @@ export async function upsertAddonPrice(input: JsonBody, options: ApiOptions = {}
 
 export async function createInvoiceDraft(
   completionId: string,
-  input: { taxRateBps?: number; discountCents?: number; dueDate?: string | null },
+  // taxRateBps is REQUIRED (numeric basis points, e.g. 662.5 = 6.625%). The
+  // caller must always supply an explicit rate — the server never defaults it.
+  input: { taxRateBps: number; discountCents?: number; dueDate?: string | null },
   options: ApiOptions = {},
 ) {
   return apiPost<{ draft: InvoiceDraft }>(
@@ -535,8 +546,31 @@ export async function getOwnerInvoices(companyId: string, options: ApiOptions = 
   );
 }
 
+// Canonicalization shared by the API route AND the client idempotency
+// fingerprint, so both compute the SAME method/reference and the server's
+// fingerprint comparison is exact equality on canonical values.
+export const PAYMENT_METHODS = ["manual", "cash", "check", "card", "ach", "transfer", "other"] as const;
+export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+export function canonicalPaymentMethod(m: string | null | undefined): string {
+  return (m ?? "").trim().toLowerCase();
+}
+export function isAllowedPaymentMethod(m: string): m is PaymentMethod {
+  return (PAYMENT_METHODS as readonly string[]).includes(m);
+}
+export function canonicalPaymentReference(r: string | null | undefined): string | null {
+  const v = (r ?? "").trim();
+  return v === "" ? null : v;
+}
+
+export type PaymentResult = {
+  payment: PaymentRecord | null;
+  amount_paid_cents: number | null;
+  balance_due_cents: number | null;
+  payment_status: string | null;
+  idempotent_replay: boolean;
+};
 export async function recordPayment(input: JsonBody, options: ApiOptions = {}) {
-  return apiPost<{ payment: PaymentRecord }>("/api/payments", input, options);
+  return apiPost<PaymentResult>("/api/payments", input, options);
 }
 
 async function apiGet<T>(path: string, options: ApiOptions) {

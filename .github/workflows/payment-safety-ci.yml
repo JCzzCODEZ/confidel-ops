@@ -1,0 +1,73 @@
+name: Payment Safety (test branch)
+
+# Manual only — never auto-runs, never creates branches, never uses production
+# credentials. Point TEST_DATABASE_URL (a repo/environment SECRET) at a dedicated,
+# pre-seeded Supabase TEST BRANCH. The job applies both migrations twice, runs the
+# SQL + concurrency tests, and asserts final grants/signatures.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: payment-safety-ci
+  cancel-in-progress: false
+
+jobs:
+  payment-safety:
+    runs-on: ubuntu-latest
+    environment: test            # use a protected GitHub Environment that holds TEST_DATABASE_URL
+    env:
+      TEST_DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+      PROD_REF: oeunlirtgvqwftcqludy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install psql + uuidgen
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client uuid-runtime
+
+      - name: Guard — secret present, not production, positive test marker
+        run: |
+          set -euo pipefail
+          : "${TEST_DATABASE_URL:?TEST_DATABASE_URL secret is not set}"
+          # NEVER set ALLOW_NONTEST_DB; the URL must self-identify as test/branch.
+          case "$TEST_DATABASE_URL" in
+            *"$PROD_REF"*) echo "REFUSING: URL points at the production project."; exit 1;;
+          esac
+          case "$TEST_DATABASE_URL" in
+            *test*|*branch*) : ;;
+            *) echo "REFUSING: URL is not a test/branch database."; exit 1;;
+          esac
+          # Positive DB-level marker BEYOND the URL name, in the PRIVATE schema
+          # (not API-exposed, so no RLS needed; readable only by the CI db role).
+          # Seed once on the test branch — see db/tests/README.md.
+          MARK=$(psql "$TEST_DATABASE_URL" -X -t -A \
+            -c "select count(*) from private._ci_test_marker where token='confidel-ci';" 2>/dev/null || echo missing)
+          if [ "$MARK" = "missing" ] || [ "$MARK" = "0" ]; then
+            echo "REFUSING: private._ci_test_marker not present/seeded on this database."; exit 1
+          fi
+          echo "Guard passed: dedicated test branch confirmed."
+
+      - name: Apply both migrations TWICE (proves rerunnable)
+        run: |
+          set -euo pipefail
+          PSQL=(psql "$TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1)
+          for pass in 1 2; do
+            echo "== migration pass $pass =="
+            "${PSQL[@]}" -f db/fixes/2026-06-29_invoice_tax_numeric.sql
+            "${PSQL[@]}" -f db/fixes/2026-06-29_payment_safety.sql
+          done
+
+      - name: SQL integration tests (tax + payment safety)
+        run: |
+          set -euo pipefail
+          PSQL=(psql "$TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1)
+          "${PSQL[@]}" -f db/tests/2026-06-29_invoice_tax_test.sql
+          "${PSQL[@]}" -f db/tests/2026-06-29_payment_safety_test.sql
+
+      - name: Concurrency test (two connections)
+        run: bash db/tests/concurrency/payment_race.sh   # ALLOW_NONTEST_DB intentionally unset
+
+      - name: Assert grants / signatures / schema
+        run: psql "$TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -f db/tests/2026-06-29_assert_grants.sql
+
+# NOTE: accountant approval of the proportional mixed-invoice discount policy is a
+# SEPARATE deployment gate, tracked outside this workflow.
