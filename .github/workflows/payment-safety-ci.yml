@@ -33,9 +33,8 @@ jobs:
               exit 1
               ;;
           esac
-
-          MARK=$(psql "$TEST_DATABASE_URL" -X -t -A -v ON_ERROR_STOP=1 \
-            -c "select marker from private._ci_test_marker where marker = 'confidel-ci';" 2>/dev/null || echo missing)
+MARK=$(psql "$TEST_DATABASE_URL" -X -t -A -v ON_ERROR_STOP=1 \
+  -c "select marker from private._ci_test_marker where marker = 'confidel-ci';" || echo missing))
 
           if [ "$MARK" != "confidel-ci" ]; then
             echo "REFUSING: private._ci_test_marker not present/seeded on this database."
