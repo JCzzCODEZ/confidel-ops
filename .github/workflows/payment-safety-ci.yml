@@ -1,9 +1,5 @@
 name: Payment Safety (test branch)
 
-# Manual only — never auto-runs, never creates branches, never uses production
-# credentials. Point TEST_DATABASE_URL (a repo/environment SECRET) at a dedicated,
-# pre-seeded Supabase TEST BRANCH. The job applies both migrations twice, runs the
-# SQL + concurrency tests, and asserts final grants/signatures.
 on:
   workflow_dispatch:
 
@@ -14,57 +10,61 @@ concurrency:
 jobs:
   payment-safety:
     runs-on: ubuntu-latest
-    environment: test            # use a protected GitHub Environment that holds TEST_DATABASE_URL
+    environment: test
     env:
       TEST_DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
       PROD_REF: oeunlirtgvqwftcqludy
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install psql + uuidgen
+      - name: Install psql and uuidgen
         run: sudo apt-get update && sudo apt-get install -y postgresql-client uuid-runtime
 
-      -       - name: Guard — secret present, not production, positive test marker
+      - name: Guard secret, production block, and test marker
         run: |
           set -euo pipefail
+
           : "${TEST_DATABASE_URL:?TEST_DATABASE_URL secret is not set}"
 
           case "$TEST_DATABASE_URL" in
-            *"$PROD_REF"*) echo "REFUSING: URL points at the production project."; exit 1;;
+            *"$PROD_REF"*)
+              echo "REFUSING: URL points at the production project."
+              exit 1
+              ;;
           esac
 
           MARK=$(psql "$TEST_DATABASE_URL" -X -t -A -v ON_ERROR_STOP=1 \
-            -c "select count(*) from private._ci_test_marker where marker='confidel-ci';" 2>/dev/null || echo missing)
+            -c "select marker from private._ci_test_marker where marker = 'confidel-ci';" 2>/dev/null || echo missing)
 
-          if [ "$MARK" = "missing" ] || [ "$MARK" = "0" ]; then
+          if [ "$MARK" != "confidel-ci" ]; then
             echo "REFUSING: private._ci_test_marker not present/seeded on this database."
             exit 1
           fi
 
           echo "Guard passed: non-production database marker confirmed."
 
-      - name: Apply both migrations TWICE (proves rerunnable)
+      - name: Apply both migrations twice
         run: |
           set -euo pipefail
           PSQL=(psql "$TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1)
+
           for pass in 1 2; do
             echo "== migration pass $pass =="
             "${PSQL[@]}" -f db/fixes/2026-06-29_invoice_tax_numeric.sql
             "${PSQL[@]}" -f db/fixes/2026-06-29_payment_safety.sql
           done
 
-      - name: SQL integration tests (tax + payment safety)
+      - name: SQL integration tests
         run: |
           set -euo pipefail
           PSQL=(psql "$TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1)
+
           "${PSQL[@]}" -f db/tests/2026-06-29_invoice_tax_test.sql
           "${PSQL[@]}" -f db/tests/2026-06-29_payment_safety_test.sql
 
-      - name: Concurrency test (two connections)
-        run: bash db/tests/concurrency/payment_race.sh   # ALLOW_NONTEST_DB intentionally unset
+      - name: Concurrency test
+        run: bash db/tests/concurrency/payment_race.sh
 
-      - name: Assert grants / signatures / schema
+      - name: Assert grants signatures and schema
         run: psql "$TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -f db/tests/2026-06-29_assert_grants.sql
-
-# NOTE: accountant approval of the proportional mixed-invoice discount policy is a
-# SEPARATE deployment gate, tracked outside this workflow.
