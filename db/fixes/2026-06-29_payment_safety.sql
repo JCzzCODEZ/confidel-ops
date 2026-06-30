@@ -186,14 +186,19 @@ create function public.mark_payment(
   p_reference       text default null
 ) returns jsonb
 language sql
+security definer
 set search_path = public, pg_temp
 as $$
   select private.mark_payment_impl(p_invoice_id, p_amount_cents, p_idempotency_key, p_paid_at, p_method, p_reference);
 $$;
 
+-- The public wrapper is SECURITY DEFINER (owner: postgres) so it can cross into
+-- the private schema on behalf of an authenticated caller. The impl is reachable
+-- ONLY through the wrapper: authenticated gets no USAGE on schema private and no
+-- EXECUTE on the impl. Authorization is enforced inside the impl (is_company_admin).
 alter function private.mark_payment_impl(uuid, integer, uuid, timestamptz, text, text) owner to postgres;
-revoke all  on function private.mark_payment_impl(uuid, integer, uuid, timestamptz, text, text) from public, anon;
-grant execute on function private.mark_payment_impl(uuid, integer, uuid, timestamptz, text, text) to authenticated;
+revoke all  on function private.mark_payment_impl(uuid, integer, uuid, timestamptz, text, text) from public, anon, authenticated;
+alter function public.mark_payment(uuid, integer, uuid, timestamptz, text, text) owner to postgres;
 revoke all  on function public.mark_payment(uuid, integer, uuid, timestamptz, text, text) from public, anon;
 grant execute on function public.mark_payment(uuid, integer, uuid, timestamptz, text, text) to authenticated;
 
