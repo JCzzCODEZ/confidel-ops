@@ -23,8 +23,16 @@ if [[ "$TEST_DATABASE_URL" == *"$PROD_REF"* ]]; then
   echo "Run against a Supabase branch / disposable test database only." >&2
   exit 1
 fi
-if [[ "${ALLOW_NONTEST_DB:-}" != "1" && "$TEST_DATABASE_URL" != *"test"* && "$TEST_DATABASE_URL" != *"branch"* ]]; then
-  echo "REFUSING: URL does not look like a test/branch DB. Set ALLOW_NONTEST_DB=1 to override." >&2
+# Positive DB-level marker in the PRIVATE schema (same check as the CI guard).
+# This, not a URL-name heuristic, confirms a disposable test database — a Supabase
+# branch pooler URL legitimately contains neither "test" nor "branch". A real
+# connection/psql error here fails the script (set -e + ON_ERROR_STOP), not hidden.
+MARK="$(psql "$TEST_DATABASE_URL" -X -t -A -v ON_ERROR_STOP=1 \
+  -c "select marker from private._ci_test_marker where marker = 'confidel-ci';")"
+MARK="$(printf '%s' "$MARK" | tr -d '[:space:]')"
+if [[ "$MARK" != "confidel-ci" ]]; then
+  echo "REFUSING: private._ci_test_marker did not return 'confidel-ci' (got: '$MARK')." >&2
+  echo "Run against a seeded Supabase branch / disposable test database only." >&2
   exit 1
 fi
 
