@@ -48,6 +48,18 @@ jobs:
 
           echo "Guard passed: non-production database marker confirmed."
 
+      - name: Apply baseline schema (idempotent prerequisites)
+        run: |
+          set -euo pipefail
+          PSQL=(psql "$TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1)
+
+          # The 2026-06-29 fixes ALTER tables created by these earlier migrations
+          # (job_financial_summaries, invoice_line_items, job_completion_*). The
+          # test branch only carries the base tables, so apply these first. Both
+          # files are idempotent (create ... if not exists / create or replace).
+          "${PSQL[@]}" -f db/fixes/2026-06-23_structured_completion.sql
+          "${PSQL[@]}" -f db/fixes/2026-06-23_pricing_invoicing.sql
+
       - name: Apply both migrations twice
         run: |
           set -euo pipefail
