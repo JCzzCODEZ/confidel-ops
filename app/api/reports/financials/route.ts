@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { assertNoDbError, handleRouteError, json, requireCompanyAdmin, requireUser } from "../../_shared";
+import { derivePaymentState } from "../../../../lib/confidel-api";
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +46,7 @@ export async function GET(request: NextRequest) {
         ? supabase.from("job_completion_addons").select("completion_id, addon_name").in("completion_id", completionIds)
         : Promise.resolve({ data: [], error: null }),
       invoiceIds.length
-        ? supabase.from("payments").select("invoice_id, method, paid_at").in("invoice_id", invoiceIds)
+        ? supabase.from("payments").select("invoice_id, amount_cents, method, paid_at").in("invoice_id", invoiceIds)
         : Promise.resolve({ data: [], error: null }),
     ]);
     void clients0;
@@ -86,13 +87,42 @@ export async function GET(request: NextRequest) {
       if (!methodByInvoice.has(p.invoice_id)) methodByInvoice.set(p.invoice_id, p.method ?? null);
     }
 
+    // Authoritative payment state from invoices + payments (read-time). The
+    // job_financial_summaries payment columns are draft-time snapshots and go
+    // stale after a payment (the draft can't be regenerated once paid), so we
+    // never trust them for live status/balance when an invoice exists.
+    const invoicesRes = invoiceIds.length
+      ? await supabase.from("invoices").select("id, amount_cents").in("id", invoiceIds)
+      : { data: [], error: null };
+    assertNoDbError(invoicesRes.error);
+    const invoiceAmountById = new Map((invoicesRes.data ?? []).map((i) => [i.id, i.amount_cents ?? 0]));
+    const paidByInvoice = new Map<string, number>();
+    for (const p of payments.data ?? []) {
+      paidByInvoice.set(p.invoice_id, (paidByInvoice.get(p.invoice_id) ?? 0) + (p.amount_cents ?? 0));
+    }
+
     const summariesEnriched = rows.map((r) => {
       const job = jobById.get(r.job_id);
       const client = job ? clientById.get(job.client_id) : null;
       const completion = completionById.get(r.completion_id);
       const employee = completion ? employeeById.get(completion.employee_user_id) : null;
+
+      // Derive live payment fields from the invoice + payments when an invoice
+      // exists; otherwise fall back to the summary's own (pre-invoice) values.
+      let amount_paid_cents = r.amount_paid_cents;
+      let balance_due_cents = r.balance_due_cents;
+      let payment_status = r.payment_status;
+      if (r.invoice_id) {
+        const invoiceTotal = invoiceAmountById.get(r.invoice_id) ?? r.invoice_total_cents ?? 0;
+        const paid = paidByInvoice.get(r.invoice_id) ?? 0;
+        ({ amount_paid_cents, balance_due_cents, payment_status } = derivePaymentState(invoiceTotal, paid));
+      }
+
       return {
         ...r,
+        amount_paid_cents,
+        balance_due_cents,
+        payment_status,
         date: completion?.submitted_at ?? r.created_at ?? null,
         job_title: job?.title ?? null,
         client_name: client?.name ?? null,

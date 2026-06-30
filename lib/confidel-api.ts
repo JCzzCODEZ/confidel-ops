@@ -573,6 +573,29 @@ export async function recordPayment(input: JsonBody, options: ApiOptions = {}) {
   return apiPost<PaymentResult>("/api/payments", input, options);
 }
 
+// Single source of truth for an invoice's live payment state, derived from the
+// authoritative invoice total + sum of payments. Used by the Records/CSV report
+// so it never trusts the (draft-time, can-go-stale) job_financial_summaries
+// payment columns once an invoice has payments.
+export type PaymentStatus = "paid" | "partial" | "unpaid";
+export type DerivedPaymentState = {
+  amount_paid_cents: number;
+  balance_due_cents: number;
+  payment_status: PaymentStatus;
+};
+export function derivePaymentState(
+  invoiceTotalCents: number | null | undefined,
+  amountPaidCents: number | null | undefined,
+): DerivedPaymentState {
+  const total = Math.max(invoiceTotalCents ?? 0, 0);
+  const paid = Math.max(amountPaidCents ?? 0, 0);
+  return {
+    amount_paid_cents: paid,
+    balance_due_cents: Math.max(total - paid, 0),
+    payment_status: total > 0 && paid >= total ? "paid" : paid > 0 ? "partial" : "unpaid",
+  };
+}
+
 async function apiGet<T>(path: string, options: ApiOptions) {
   return apiFetch<T>(path, { method: "GET" }, options);
 }
