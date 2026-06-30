@@ -76,9 +76,13 @@ seed_invoice() {  # prints invoice_id ; total = 106625
     insert into public.service_prices (company_id,service_name,price_cents,taxable,active) values ('$CO','Svc',100000,true,true) on conflict do nothing;
     insert into public.job_completion_services (company_id,job_id,completion_id,service_name) values ('$CO','$JOB','$COMP','Svc') on conflict do nothing;
 SQL
+  # Set the JWT claims INSIDE the same statement (a FROM subquery) so psql prints
+  # exactly ONE row — the invoice id. A separate `select set_config(...)` statement
+  # would emit its own result row that the caller would capture along with the id.
   "${PSQL[@]}" <<SQL
-    $(claims)
-    select (public.create_invoice_draft_from_completion('$COMP', 662.5, 0, null)->>'invoice_id');
+    select (public.create_invoice_draft_from_completion('$COMP', 662.5, 0, null)->>'invoice_id')
+    from (select set_config('request.jwt.claims',
+      json_build_object('sub','$OWNER','role','authenticated','email','o@test')::text, false)) _claims;
 SQL
 }
 
