@@ -24,45 +24,20 @@ import {
   getApiOptions,
   hasEmployeeAccess,
   hasOwnerAccess,
-  roleLabel,
   signOut,
 } from "../../lib/auth";
 import { createSupabaseBrowserClient } from "../../lib/supabase/client";
-
-const SERVICE_OPTIONS = [
-  "Standard Cleaning",
-  "Deep Cleaning",
-  "Move-In / Move-Out Cleaning",
-  "Airbnb Turnover",
-  "House Sitting",
-  "Pet Care",
-  "Plant Care",
-  "Laundry",
-  "Organization",
-  "Mobile Detailing",
-  "Interior Detailing",
-  "Exterior Detailing",
-  "Other",
-];
-
-const ADDON_OPTIONS = [
-  "Inside Fridge",
-  "Inside Oven",
-  "Interior Windows",
-  "Baseboards",
-  "Blinds",
-  "Deep Bathroom Detail",
-  "Deep Kitchen Detail",
-  "Extra Bedroom",
-  "Extra Bathroom",
-  "Laundry",
-  "Dishes",
-  "Trash Removal",
-  "Garage",
-  "Patio",
-  "Pet Cleanup",
-  "Other Add-On",
-];
+import {
+  ADDON_OPTIONS,
+  COMPLETION_STATUS_OPTIONS,
+  jobStatusLabel,
+  roleChip,
+  SERVICE_OPTIONS,
+  useEmployeeLang,
+  type Lang,
+  type TFn,
+} from "../../lib/i18n/employee";
+import { LanguageSelector } from "../i18n/language-selector";
 
 // A job is only submittable while it's active work assigned to this employee.
 const FINISHED_STATUSES = ["approved", "rejected", "completed", "cancelled", "paid", "submitted"];
@@ -78,6 +53,8 @@ const checkItemStyle: CSSProperties = { display: "flex", alignItems: "center", g
 export function EmployeeDashboard() {
   const router = useRouter();
   const [profile, setProfile] = useState<SessionProfile | null>(null);
+  const [accountLang, setAccountLang] = useState<string | null>(null);
+  const { lang, setLang, t } = useEmployeeLang(accountLang);
   const [jobs, setJobs] = useState<JobRecord[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -132,11 +109,30 @@ export function EmployeeDashboard() {
     !FINISHED_STATUSES.includes(String(selectedJob?.status ?? "")) &&
     selectedJob?.assignment_status !== "cancelled";
 
+  // Seed the language from the invite/account preference (user_metadata) when the
+  // employee hasn't made an explicit in-app choice yet.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const supabase = createSupabaseBrowserClient();
+        const { data } = await supabase.auth.getUser();
+        const pref = (data.user?.user_metadata as Record<string, unknown> | undefined)?.preferred_language;
+        if (active && (pref === "en" || pref === "es")) setAccountLang(pref);
+      } catch {
+        /* ignore — fall back to localStorage / browser / en */
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
   useEffect(() => {
     let active = true;
     const timeout = setTimeout(() => {
       if (active) {
-        setError("Session check timed out. Please refresh or sign in again.");
+        setError(t("err.sessionTimeout"));
         setLoading(false);
       }
     }, 8000);
@@ -168,9 +164,9 @@ export function EmployeeDashboard() {
         setProfile(nextProfile);
         setJobs(jobResult.jobs);
         setSelectedJobId(jobResult.jobs[0]?.id ?? null);
-      } catch (loadError) {
+      } catch {
         if (!active) return;
-        setError(loadError instanceof Error ? loadError.message : "Unable to load employee dashboard.");
+        setError(t("err.loadDashboard"));
         router.replace("/");
       } finally {
         if (active) {
@@ -185,6 +181,8 @@ export function EmployeeDashboard() {
       active = false;
       clearTimeout(timeout);
     };
+    // t is stable per lang; we intentionally run this once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);
 
   async function refreshJobs() {
@@ -309,7 +307,7 @@ export function EmployeeDashboard() {
     setCompletionId(null);
 
     if (!selectedJob) {
-      setError("Select a job before submitting.");
+      setError(t("val.selectJob"));
       setBusy(false);
       return;
     }
@@ -320,32 +318,32 @@ export function EmployeeDashboard() {
 
     // Clear, specific validation messages (not just a disabled button).
     if (!services.length) {
-      setError("Select at least one service completed.");
+      setError(t("val.selectService"));
       setBusy(false);
       return;
     }
     if (!beforeFiles.length) {
-      setError("Add at least one before photo.");
+      setError(t("val.beforePhoto"));
       setBusy(false);
       return;
     }
     if (!afterFiles.length) {
-      setError("Add at least one after photo.");
+      setError(t("val.afterPhoto"));
       setBusy(false);
       return;
     }
     if (!hasSignature) {
-      setError("Please sign in the signature box before submitting.");
+      setError(t("val.signature"));
       setBusy(false);
       return;
     }
     if (!confirmed) {
-      setError("Please check the confirmation box before submitting.");
+      setError(t("val.confirm"));
       setBusy(false);
       return;
     }
     if (!startTime || !endTime) {
-      setError("Enter the start and end time for this job.");
+      setError(t("val.startEnd"));
       setBusy(false);
       return;
     }
@@ -354,7 +352,7 @@ export function EmployeeDashboard() {
     try {
       signatureFile = await signatureToFile(canvasRef.current);
     } catch {
-      setError("Could not capture the signature. Please sign again.");
+      setError(t("val.signatureCapture"));
       setBusy(false);
       return;
     }
@@ -389,6 +387,8 @@ export function EmployeeDashboard() {
             end: endTime,
             breakMinutes: breakMinutes ? Number(breakMinutes) : null,
             completionStatus,
+            // Submit canonical English service/add-on names — the owner prices on
+            // these and the DB stores them; only the on-screen label is localized.
             services: [...services, ...(otherServiceNotes.trim() ? [`Other: ${otherServiceNotes.trim()}`] : [])],
             addons: [...addOns, ...(otherAddonNotes.trim() ? [`Other: ${otherAddonNotes.trim()}`] : [])],
             expenses: buildExpenses(),
@@ -396,7 +396,7 @@ export function EmployeeDashboard() {
           options,
         );
       } catch {
-        warnings.push("service/expense details didn't save — the owner can still review, and you can resubmit");
+        warnings.push(t("warn.detailsNotSaved"));
       }
 
       if (selectedJob.company_id) {
@@ -410,34 +410,33 @@ export function EmployeeDashboard() {
             ] as { mediaType: JobMediaType; files: File[] }[]
           ).filter((group) => group.files.length > 0);
           if (groups.length) {
-            setMessage("Submitted for owner review. Uploading attachments…");
+            setMessage(t("msg.uploadingAttachments"));
             await uploadCompletionMedia({
               companyId: selectedJob.company_id,
               jobId: selectedJob.id,
               completionId: result.completion.id,
               groups,
               options,
-              onProgress: (msg) => setMessage(`Submitted for owner review. ${msg}`),
+              onProgress: (done, total) =>
+                setMessage(t(total === 1 ? "msg.uploadProgressOne" : "msg.uploadProgressOther", { done, total })),
             });
           }
         } catch {
-          warnings.push("some attachments didn't upload — the owner can still review");
+          warnings.push(t("warn.attachmentsNotUploaded"));
         }
       } else {
-        warnings.push("attachments weren't linked (missing company)");
+        warnings.push(t("warn.attachmentsNotLinked"));
       }
 
       setMessage(
-        warnings.length
-          ? `Submitted for owner review. Note: ${warnings.join("; ")}.`
-          : "Submitted for owner review.",
+        warnings.length ? t("msg.submittedWithNote", { notes: warnings.join("; ") }) : t("msg.submittedReview"),
       );
       resetForm();
       await refreshJobs();
     } catch (submitError) {
       // Only reached if the base completion submit itself failed.
-      const raw = submitError instanceof Error ? submitError.message : "Completion failed.";
-      setError(friendlyCompletionError(raw));
+      const raw = submitError instanceof Error ? submitError.message : t("err.completionFailed");
+      setError(friendlyCompletionError(raw, t));
     } finally {
       setBusy(false);
     }
@@ -447,7 +446,7 @@ export function EmployeeDashboard() {
     return (
       <main className="screen">
         <div className="shell loading" data-testid="auth-loading">
-          Loading employee dashboard
+          {t("boot.loadingEmployee")}
         </div>
       </main>
     );
@@ -471,9 +470,10 @@ export function EmployeeDashboard() {
             </div>
           </div>
           <div className="button-row">
-            <span className="status">{roleLabel(role)}</span>
+            <LanguageSelector lang={lang} onChange={setLang} ariaLabel={t("lang.aria")} />
+            <span className="status">{roleChip(lang, role?.role)}</span>
             <button className="btn secondary" data-testid="employee-sign-out" onClick={handleLogout} type="button">
-              Sign out
+              {t("nav.signOut")}
             </button>
           </div>
         </header>
@@ -481,7 +481,7 @@ export function EmployeeDashboard() {
         <section className="panel stack" data-testid="employee-dashboard">
           <div className="section-head">
             <div>
-              <p className="eyebrow">Employee dashboard</p>
+              <p className="eyebrow">{t("head.employeeDashboard")}</p>
               <h2>{displayName(profile)}</h2>
               <p>{profile?.user.email}</p>
             </div>
@@ -495,7 +495,7 @@ export function EmployeeDashboard() {
           ) : null}
           {completionId ? (
             <div className="notice" data-testid="completion-confirmation">
-              Completion ID: {completionId}
+              {t("completion.idLabel")} {completionId}
             </div>
           ) : null}
 
@@ -503,8 +503,8 @@ export function EmployeeDashboard() {
             <section className="stack">
               <div className="section-head">
                 <div>
-                  <h3>Assigned jobs</h3>
-                  <p>{jobs.length} visible assignment{jobs.length === 1 ? "" : "s"}</p>
+                  <h3>{t("jobs.assigned")}</h3>
+                  <p>{jobs.length === 1 ? t("jobs.visibleOne") : t("jobs.visibleOther", { count: jobs.length })}</p>
                 </div>
               </div>
               <div className="list" data-testid="employee-job-list">
@@ -520,17 +520,17 @@ export function EmployeeDashboard() {
                       <div className="card-row">
                         <div>
                           <h3>{job.title}</h3>
-                          <p className="muted small">{job.client_name || "Client"}</p>
+                          <p className="muted small">{job.client_name || t("jobs.client")}</p>
                           <p className="muted small">
-                            {job.scheduled_for ? formatDate(job.scheduled_for) : "Unscheduled"}
+                            {job.scheduled_for ? formatDate(job.scheduled_for, lang) : t("jobs.unscheduled")}
                           </p>
                         </div>
-                        <span className="status">{job.assignment_status ?? job.status}</span>
+                        <span className="status">{jobStatusLabel(lang, job.assignment_status ?? job.status)}</span>
                       </div>
                     </button>
                   ))
                 ) : (
-                  <div className="empty">No assigned jobs.</div>
+                  <div className="empty">{t("jobs.none")}</div>
                 )}
               </div>
             </section>
@@ -542,133 +542,135 @@ export function EmployeeDashboard() {
                     <div className="card-row">
                       <div>
                         <h3>{selectedJob.title}</h3>
-                        <p className="muted small">{selectedJob.description || "No description"}</p>
-                        <p className="muted small">{selectedJob.client_name || "Client"}</p>
+                        <p className="muted small">{selectedJob.description || t("job.noDescription")}</p>
+                        <p className="muted small">{selectedJob.client_name || t("jobs.client")}</p>
                       </div>
-                      <span className="status">{selectedJob.status}</span>
+                      <span className="status">{jobStatusLabel(lang, selectedJob.status)}</span>
                     </div>
                   </article>
 
                   {submittable ? (
                     <form className="form-grid" onSubmit={handleSubmit}>
                       <fieldset className="wide" style={{ border: 0, padding: 0, margin: 0 }}>
-                        <legend>Job timing</legend>
+                        <legend>{t("form.jobTiming")}</legend>
                         <div style={checkGridStyle}>
                           <label>
-                            Arrival
+                            {t("form.arrival")}
                             <input type="time" data-testid="completion-arrival" value={arrival} onChange={(e) => setArrival(e.target.value)} />
                           </label>
                           <label>
-                            Start (required)
+                            {t("form.startRequired")}
                             <input type="time" data-testid="completion-start" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
                           </label>
                           <label>
-                            End (required)
+                            {t("form.endRequired")}
                             <input type="time" data-testid="completion-end" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
                           </label>
                           <label>
-                            Break (min)
+                            {t("form.breakMin")}
                             <input type="number" min="0" data-testid="completion-break" value={breakMinutes} onChange={(e) => setBreakMinutes(e.target.value)} />
                           </label>
                           <label>
-                            Job status
+                            {t("form.jobStatus")}
                             <select
                               data-testid="completion-status"
                               value={completionStatus}
                               onChange={(e) => setCompletionStatus(e.target.value as typeof completionStatus)}
                             >
-                              <option>Completed</option>
-                              <option>Partially Completed</option>
-                              <option>Needs Follow-Up</option>
+                              {COMPLETION_STATUS_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {t(option.labelKey)}
+                                </option>
+                              ))}
                             </select>
                           </label>
                         </div>
                       </fieldset>
 
                       <fieldset className="wide" style={{ border: 0, padding: 0, margin: 0 }}>
-                        <legend>Services completed (select all that apply)</legend>
+                        <legend>{t("form.servicesLegend")}</legend>
                         <div data-testid="completion-services" style={checkGridStyle}>
                           {SERVICE_OPTIONS.map((option) => (
-                            <label key={option} style={checkItemStyle}>
+                            <label key={option.value} style={checkItemStyle}>
                               <input
                                 type="checkbox"
-                                data-testid={`service-${slug(option)}`}
-                                checked={services.includes(option)}
-                                onChange={() => setServices((current) => toggleItem(current, option))}
+                                data-testid={`service-${slug(option.value)}`}
+                                checked={services.includes(option.value)}
+                                onChange={() => setServices((current) => toggleItem(current, option.value))}
                               />
-                              <span>{option}</span>
+                              <span>{t(option.labelKey)}</span>
                             </label>
                           ))}
                         </div>
                         <input
                           className="wide"
                           data-testid="completion-other-services"
-                          placeholder="Other service notes"
+                          placeholder={t("form.otherServiceNotes")}
                           value={otherServiceNotes}
                           onChange={(event) => setOtherServiceNotes(event.target.value)}
                         />
                       </fieldset>
 
                       <fieldset className="wide" style={{ border: 0, padding: 0, margin: 0 }}>
-                        <legend>Add-ons completed</legend>
+                        <legend>{t("form.addonsLegend")}</legend>
                         <div data-testid="completion-addons" style={checkGridStyle}>
                           {ADDON_OPTIONS.map((option) => (
-                            <label key={option} style={checkItemStyle}>
+                            <label key={option.value} style={checkItemStyle}>
                               <input
                                 type="checkbox"
-                                data-testid={`addon-${slug(option)}`}
-                                checked={addOns.includes(option)}
-                                onChange={() => setAddOns((current) => toggleItem(current, option))}
+                                data-testid={`addon-${slug(option.value)}`}
+                                checked={addOns.includes(option.value)}
+                                onChange={() => setAddOns((current) => toggleItem(current, option.value))}
                               />
-                              <span>{option}</span>
+                              <span>{t(option.labelKey)}</span>
                             </label>
                           ))}
                         </div>
                         <input
                           className="wide"
                           data-testid="completion-other-addons"
-                          placeholder="Other add-on notes"
+                          placeholder={t("form.otherAddonNotes")}
                           value={otherAddonNotes}
                           onChange={(event) => setOtherAddonNotes(event.target.value)}
                         />
                       </fieldset>
 
                       <fieldset className="wide" style={{ border: 0, padding: 0, margin: 0 }}>
-                        <legend>Expenses / reimbursements (itemized, optional)</legend>
+                        <legend>{t("form.expensesLegend")}</legend>
                         <div style={checkGridStyle}>
                           <label>
-                            Supplies (description)
+                            {t("form.suppliesDesc")}
                             <input data-testid="expense-supplies-desc" value={suppliesDesc} onChange={(e) => setSuppliesDesc(e.target.value)} />
                           </label>
                           <label>
-                            Supplies cost ($)
+                            {t("form.suppliesCost")}
                             <input type="number" min="0" step="0.01" data-testid="expense-supplies-cost" value={suppliesCost} onChange={(e) => setSuppliesCost(e.target.value)} />
                           </label>
                           <label>
-                            Mileage (miles)
+                            {t("form.mileage")}
                             <input type="number" min="0" step="0.1" data-testid="expense-mileage" value={mileage} onChange={(e) => setMileage(e.target.value)} />
                           </label>
                           <label>
-                            Parking ($)
+                            {t("form.parking")}
                             <input type="number" min="0" step="0.01" data-testid="expense-parking" value={parking} onChange={(e) => setParking(e.target.value)} />
                           </label>
                           <label>
-                            Tolls ($)
+                            {t("form.tolls")}
                             <input type="number" min="0" step="0.01" data-testid="expense-tolls" value={tolls} onChange={(e) => setTolls(e.target.value)} />
                           </label>
                           <label>
-                            Other (description)
+                            {t("form.otherDesc")}
                             <input data-testid="expense-other-desc" value={otherExpenseDesc} onChange={(e) => setOtherExpenseDesc(e.target.value)} />
                           </label>
                           <label>
-                            Other cost ($)
+                            {t("form.otherCost")}
                             <input type="number" min="0" step="0.01" data-testid="expense-other-cost" value={otherExpenseCost} onChange={(e) => setOtherExpenseCost(e.target.value)} />
                           </label>
                         </div>
                       </fieldset>
 
                       <label className="wide">
-                        Employee Notes / Issues / Follow-Up Needed
+                        {t("form.employeeNotes")}
                         <textarea
                           data-testid="completion-notes"
                           value={employeeNotes}
@@ -677,16 +679,16 @@ export function EmployeeDashboard() {
                       </label>
 
                       <label className="wide">
-                        Before photos (required)
+                        {t("form.beforePhotos")}
                         <input ref={beforeRef} data-testid="completion-before" type="file" accept="image/*" multiple />
                       </label>
                       <label className="wide">
-                        After photos (required)
+                        {t("form.afterPhotos")}
                         <input ref={afterRef} data-testid="completion-after" type="file" accept="image/*" multiple />
                       </label>
 
                       <div className="wide">
-                        <p className="muted small">Signature (required) — sign below</p>
+                        <p className="muted small">{t("form.signatureHint")}</p>
                         <canvas
                           ref={canvasRef}
                           width={600}
@@ -714,12 +716,12 @@ export function EmployeeDashboard() {
                           onClick={clearSignature}
                           style={{ marginTop: "8px" }}
                         >
-                          Clear signature
+                          {t("form.clearSignature")}
                         </button>
                       </div>
 
                       <label className="wide">
-                        Other attachments / damage / insurance (optional)
+                        {t("form.otherAttachments")}
                         <input ref={otherRef} data-testid="completion-other" type="file" multiple />
                       </label>
 
@@ -730,12 +732,10 @@ export function EmployeeDashboard() {
                           checked={confirmed}
                           onChange={(event) => setConfirmed(event.target.checked)}
                         />
-                        <span>I confirm this report is accurate and complete.</span>
+                        <span>{t("form.confirmText")}</span>
                       </label>
 
-                      <p className="muted small">
-                        Photos and signature upload to private storage. Links are never public.
-                      </p>
+                      <p className="muted small">{t("form.storageNote")}</p>
 
                       <button
                         className="btn gold wide"
@@ -743,21 +743,24 @@ export function EmployeeDashboard() {
                         disabled={busy}
                         type="submit"
                       >
-                        {busy ? "Submitting…" : "Submit completion"}
+                        {busy ? t("form.submitting") : t("form.submit")}
                       </button>
                     </form>
                   ) : (
                     <article className="card" data-testid="employee-job-readonly">
                       <p className="muted">
-                        This job is <strong>{selectedJob.status}</strong>
-                        {selectedJob.assignment_status ? ` (${selectedJob.assignment_status})` : ""} — read-only.
-                        No completion can be submitted.
+                        {t("job.readonly", {
+                          status: jobStatusLabel(lang, selectedJob.status),
+                          assignment: selectedJob.assignment_status
+                            ? ` (${jobStatusLabel(lang, selectedJob.assignment_status)})`
+                            : "",
+                        })}
                       </p>
                     </article>
                   )}
                 </>
               ) : (
-                <div className="empty">Select an assigned job.</div>
+                <div className="empty">{t("job.selectAssigned")}</div>
               )}
             </section>
           </div>
@@ -802,7 +805,7 @@ async function uploadCompletionMedia(params: {
   completionId: string;
   groups: { mediaType: JobMediaType; files: File[] }[];
   options: ApiOptions;
-  onProgress?: (message: string) => void;
+  onProgress?: (done: number, total: number) => void;
 }) {
   const supabase = createSupabaseBrowserClient();
   const total = params.groups.reduce((sum, group) => sum + group.files.length, 0);
@@ -838,7 +841,7 @@ async function uploadCompletionMedia(params: {
       );
 
       uploaded += 1;
-      params.onProgress?.(`Uploaded ${uploaded}/${total} file${total === 1 ? "" : "s"}.`);
+      params.onProgress?.(uploaded, total);
     }
   }
 
@@ -850,15 +853,15 @@ function dollarsToCents(value: string) {
   return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed * 100) : 0;
 }
 
-function friendlyCompletionError(message: string) {
+function friendlyCompletionError(message: string, t: TFn) {
   if (message.includes("not assigned") || message.includes("not submittable")) {
-    return "This job has already been submitted or is not available for completion.";
+    return t("err.alreadySubmitted");
   }
   return message;
 }
 
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat("en", {
+function formatDate(value: string, lang: Lang) {
+  return new Intl.DateTimeFormat(lang, {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));

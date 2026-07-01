@@ -5,9 +5,12 @@ import { useRouter } from "next/navigation";
 import { acceptInvite, getSessionProfile } from "../../lib/confidel-api";
 import { hasEmployeeAccess, hasOwnerAccess } from "../../lib/auth";
 import { createSupabaseBrowserClient } from "../../lib/supabase/client";
+import { useEmployeeLang } from "../../lib/i18n/employee";
+import { LanguageSelector } from "../i18n/language-selector";
 
 export function LoginLanding() {
   const router = useRouter();
+  const { lang, setLang, t } = useEmployeeLang();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -44,7 +47,7 @@ export function LoginLanding() {
     // Timeout protection: never let the boot screen spin forever.
     const timeout = setTimeout(() => {
       if (active) {
-        setError("Session check timed out. Please refresh or sign in again.");
+        setError(t("err.sessionTimeout"));
         setBooting(false);
       }
     }, 8000);
@@ -77,11 +80,11 @@ export function LoginLanding() {
         }
 
         if (!routed) {
-          setError("No active membership yet. Ask your owner to invite this email, then sign in again.");
+          setError(t("err.noMembership"));
         }
       } catch {
         if (active) {
-          setError("Couldn’t verify your session. Please sign in.");
+          setError(t("err.verifySession"));
         }
       } finally {
         if (active) {
@@ -97,6 +100,7 @@ export function LoginLanding() {
       active = false;
       clearTimeout(timeout);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -111,7 +115,7 @@ export function LoginLanding() {
     });
 
     if (signInError || !data.session?.access_token) {
-      setError(signInError?.message ?? "Unable to sign in.");
+      setError(t("err.unableSignIn"));
       setLoading(false);
       return;
     }
@@ -119,11 +123,11 @@ export function LoginLanding() {
     try {
       const routed = await resolveAndRoute(data.session.access_token);
       if (!routed) {
-        setError("No active membership yet. Ask your owner to invite this email, then sign in again.");
+        setError(t("err.noMembership"));
         setLoading(false);
       }
-    } catch (profileError) {
-      setError(profileError instanceof Error ? profileError.message : "Unable to load profile.");
+    } catch {
+      setError(t("err.unableLoadProfile"));
       setLoading(false);
     }
   }
@@ -132,7 +136,7 @@ export function LoginLanding() {
     return (
       <main className="screen">
         <div className="shell loading" data-testid="auth-loading">
-          Opening Confidel
+          {t("boot.opening")}
         </div>
       </main>
     );
@@ -152,33 +156,32 @@ export function LoginLanding() {
             </div>
             <div>
               <p className="brand-title">Confidel</p>
-              <p className="brand-subtitle">Operations</p>
+              <p className="brand-subtitle">{t("brand.operations")}</p>
             </div>
           </div>
+          <LanguageSelector lang={lang} onChange={setLang} ariaLabel={t("lang.aria")} />
         </header>
 
         <div className="login-grid">
           <section className="panel hero-panel">
             <div>
-              <p className="eyebrow">Private operations suite</p>
+              <p className="eyebrow">{t("login.eyebrow")}</p>
               <h1>Confidel</h1>
             </div>
-            <p className="hero-copy">
-              A focused workspace for clients, jobs, employee completions, invoices, and payments.
-            </p>
+            <p className="hero-copy">{t("login.heroCopy")}</p>
           </section>
 
           <section className="panel">
             <div className="section-head">
               <div>
-                <h2>Sign in</h2>
-                <p>Secure access for owners, admins, and field employees.</p>
+                <h2>{t("login.signIn")}</h2>
+                <p>{t("login.subtitle")}</p>
               </div>
             </div>
 
             <form className="stack" onSubmit={handleSubmit}>
               <label>
-                Email
+                {t("login.email")}
                 <input
                   autoComplete="email"
                   data-testid="login-email"
@@ -191,7 +194,7 @@ export function LoginLanding() {
               </label>
 
               <label>
-                Password
+                {t("login.password")}
                 <input
                   autoComplete="current-password"
                   data-testid="login-password"
@@ -210,7 +213,7 @@ export function LoginLanding() {
               ) : null}
 
               <button className="btn gold" data-testid="login-submit" disabled={loading} type="submit">
-                {loading ? "Signing in" : "Sign in"}
+                {loading ? t("login.signingIn") : t("login.signIn")}
               </button>
             </form>
           </section>
